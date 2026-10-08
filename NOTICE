@@ -1,0 +1,13 @@
+Personal Agent
+Copyright 2026 Personal Agent contributors
+
+This project includes code adapted from nuwax-ai/nuwa-cli:
+  https://github.com/nuwax-ai/nuwa-cli
+  Commit: 39cc8a50b81763297573bdba65fd606262253f76
+  Source: src/core/processes/killTree.ts
+  Destination: packages/runtime/src/engine-process.ts
+  License: Apache License 2.0 (included in LICENSE)
+
+The adapted process cleanup uses bounded asynchronous cleanup and explicit
+failure reporting. Original source copyright and license notices are retained.
+Claude Code ACP and ACP SDK remain separately licensed third-party dependencies.

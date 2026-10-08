@@ -1,0 +1,12 @@
+{
+  "name": "@personal-agent/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@personal-agent/contracts": "*",
+    "@agentclientprotocol/sdk": "1.3.0",
+    "claude-code-acp-ts": "0.65.0"
+  }
+}

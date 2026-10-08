@@ -1,0 +1,12 @@
+# Template only. Replace placeholders after approving the tunnel and hostname.
+# No credentials are supplied and no cloudflared command has been executed.
+# For a locally managed Named Tunnel only. Remotely managed ingress belongs
+# in its management plane; do not insert a connector token into this file.
+tunnel: <APPROVED_TUNNEL_UUID>
+credentials-file: <APPROVED_EXISTING_CREDENTIALS_FILE>
+ingress:
+  - hostname: <APPROVED_FIXED_HTTPS_HOSTNAME>
+    service: http://127.0.0.1:47801
+    originRequest:
+      httpHostHeader: <APPROVED_FIXED_HTTPS_HOSTNAME>
+  - service: http_status:404

@@ -1,0 +1,30 @@
+{
+  "name": "personal-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=22.18.0" },
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "node --import tsx apps/server/src/main.ts",
+    "dev:web": "npm run dev --workspace @personal-agent/web",
+    "typecheck": "tsc --noEmit && npm run typecheck --workspace @personal-agent/web",
+    "test": "vitest run",
+    "build": "npm run typecheck && npm run build --workspace @personal-agent/web",
+    "probe:claude": "node --import tsx scripts/probe-claude.ts",
+    "fixture": "node --import tsx scripts/create-fixture.ts",
+    "pair": "node --import tsx scripts/pair.ts",
+    "smoke": "node --import tsx scripts/smoke.ts",
+    "doctor": "node --import tsx scripts/doctor.ts",
+    "demo": "node --import tsx scripts/demo.ts",
+    "backup": "node --import tsx scripts/backup.ts",
+    "share:check": "node --import tsx scripts/share-check.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  }
+}
