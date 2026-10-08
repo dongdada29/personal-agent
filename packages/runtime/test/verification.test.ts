@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OwnedProcessRecord } from '../src/process-registry.js';
 import { runVerification, verificationEnvironment } from '../src/verification.js';
+import { processRunning as alive } from './helpers/process-observation.js';
 
 let directory: string;
 
@@ -19,11 +20,6 @@ async function waitForFile(path: string): Promise<string> {
     catch { await new Promise((done) => setTimeout(done, 10)); }
   }
   throw new Error('Fixture output did not arrive.');
-}
-
-function alive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch { return false; }
 }
 
 function deferred<T>() {

@@ -2,19 +2,16 @@
 // 39cc8a50b81763297573bdba65fd606262253f76 (Apache-2.0).
 // Source: https://github.com/nuwax-ai/nuwa-cli
 // Changes: bounded asynchronous Windows cleanup, shorter stage-one deadlines,
-// explicit failure reporting, no logging of process arguments or stderr.
+// explicit failure reporting, Linux zombie-aware group verification,
+// no logging of process arguments or stderr.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EngineError } from './engine.js';
+import { processAlive, processGroupAlive } from './process-state.js';
 
 export interface EngineTeardownOptions {
   naturalExitMs?: number;
   termEscalateMs?: number;
   killVerifyMs?: number;
-}
-
-function alive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
 async function waitForGone(check: () => boolean, budgetMs: number): Promise<boolean> {
@@ -39,7 +36,7 @@ export async function terminateEngineProcessTree(proc: ChildProcess, options: En
   const pid = proc.pid;
   if (pid === undefined) return;
   const { naturalExitMs = 150, termEscalateMs = 800, killVerifyMs = 500 } = options;
-  const treeAlive = () => alive(process.platform === 'win32' ? pid : -pid);
+  const treeAlive = () => process.platform === 'win32' ? processAlive(pid) : processGroupAlive(pid);
   if (process.platform === 'win32') {
     // Windows cannot inspect an already-orphaned process tree by parent PID.
     // Run taskkill while the parent still exists, without an EOF grace window;

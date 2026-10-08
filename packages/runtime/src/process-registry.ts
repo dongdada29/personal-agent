@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { EngineError } from './engine.js';
 import { terminateEngineProcessTree } from './engine-process.js';
+import { processAlive, processGroupAlive } from './process-state.js';
 
 export interface OwnedProcessRecord {
   /** UUID also appears in the owner's argv; never derived from a task ID. */
@@ -30,10 +31,6 @@ export const processOwnerWrapperPath = fileURLToPath(new URL('./process-owner.mj
 const execFileAsync = promisify(execFile);
 const UUID = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const supported = () => process.platform === 'darwin' || process.platform === 'linux';
-const alive = (pid: number): boolean => {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
-};
 function bounded<T>(promise: Promise<T>, ms: number, error: EngineError): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(error), ms);
@@ -46,21 +43,21 @@ export async function verifyProcessOwner(record: OwnedProcessRecord): Promise<'o
   if (!supported() || !UUID.test(record.id) || !Number.isSafeInteger(record.pid) || record.pid < 1 ||
     record.pgid !== record.pid || record.wrapperPath !== processOwnerWrapperPath ||
     !['engine', 'verification'].includes(record.kind)) return 'unsafe';
-  const pidAlive = alive(record.pid), groupAlive = alive(-record.pgid);
+  const pidAlive = processAlive(record.pid), groupAlive = processGroupAlive(record.pgid);
   if (!pidAlive) return groupAlive ? 'unsafe' : 'gone';
   if (!groupAlive) return 'unsafe';
   try {
     const { stdout } = await execFileAsync('ps', ['-ww', '-p', String(record.pid), '-o', 'pid=', '-o', 'pgid=', '-o', 'command='],
       { encoding: 'utf8', timeout: 1_000, maxBuffer: 8192, env: { PATH: '/usr/bin:/bin' } });
     const parsed = /^\s*(\d+)\s+(\d+)\s+([^\r\n]+)\s*$/u.exec(stdout);
-    if (!parsed) return !alive(record.pid) && !alive(-record.pgid) ? 'gone' : 'unsafe';
+    if (!parsed) return !processAlive(record.pid) && !processGroupAlive(record.pgid) ? 'gone' : 'unsafe';
     return Number(parsed[1]) === record.pid && Number(parsed[2]) === record.pgid &&
       parsed[3].trim() === `${process.execPath} ${record.wrapperPath} --personal-agent-owner=${record.id}` ? 'owned' : 'unsafe';
   } catch (error) {
     // Permission denial is an unsafe inspection even when the process exits
     // concurrently; never turn a refused read into an ownership conclusion.
     if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) return 'unsafe';
-    return !alive(record.pid) && !alive(-record.pgid) ? 'gone' : 'unsafe';
+    return !processAlive(record.pid) && !processGroupAlive(record.pgid) ? 'gone' : 'unsafe';
   }
 }
 
@@ -90,8 +87,8 @@ export async function recoverOwnedProcesses(records: OwnedProcessRecord[], onClo
       };
       const gone = async (ms: number) => {
         const until = Date.now() + ms;
-        while (alive(-record.pgid) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 25));
-        return !alive(record.pid) && !alive(-record.pgid);
+        while (processGroupAlive(record.pgid) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 25));
+        return !processAlive(record.pid) && !processGroupAlive(record.pgid);
       };
       await signal('SIGTERM');
       if (!(await gone(termGraceMs))) {

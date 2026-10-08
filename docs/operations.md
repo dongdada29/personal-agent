@@ -2,6 +2,8 @@
 
 Personal Agent 当前是一台机器上的单实例服务，持久保存任务和恢复证据，用于减少断线、失败与重启造成的数据混乱。它尚未提供多节点容灾、服务冗余、自动故障切换或零停机升级；机器停机时浏览器无法访问。
 
+后续开发与测试在 Codex Linux 云端工作区完成，不依赖 MacBook 或 M1 在线，也不自动升级或恢复旧 M1 实例。云端工作区会话用于开发和临时验收，不承诺生产永久在线、系统自启动或持续公网入口。验收版本、环境、完整命令与边界见 [Linux 云端验收](linux-cloud-acceptance.md)。
+
 ## 日常运行与健康
 
 在已安装、已构建的源码目录前台启动：
@@ -130,8 +132,10 @@ test ! -e "$RESTORE_DIR" && mkdir -m 700 "$RESTORE_DIR" && \
 
 实例先取得独占目录锁，再核验持久执行进程账本，最后协调任务和开始调度：
 
-- 旧服务 PID 明确已不存在时，启动器可通过排他 `recovery.lock` 回收旧 `service.lock`。活进程、PID 复用、锁畸形、EPERM 或归属不明确均阻止启动。
+- 旧服务 PID 明确已不存在，或 Linux 已确认其为没有活动线程的僵尸时，启动器可通过排他 `recovery.lock` 回收旧 `service.lock`。活进程、PID 复用、锁畸形、EPERM 或归属不明确均阻止启动。
 - 固定 Node executable、owner wrapper 路径、owner UUID、PID/PGID 等一致时，恢复器才停止对应执行进程。保存一个 PID 不足以证明归属。
+- Linux 通过只读 `/proc` 检查区分僵尸与活动进程。僵尸已停止执行，但可能因容器 init 未回收仍占有 PID/PGID；只确认进程组没有活动成员后才认定执行已结束。owner 已成为僵尸而组内仍有活动成员，或状态/归属无法核验时，继续保留恢复门禁，不放宽 `unsafe` 检查。
+- Linux 检查要求 `/proc` 与当前 PID 命名空间一致、进程列表完整可见。过滤进程的 `hidepid` 挂载、PID 目录的额外挂载或不可读取的状态会阻断僵尸组判定；僵尸主线程仍有其他线程时也视作活动。最终回收僵尸由父进程/init 负责，长期容器运行仍应使用能回收孤儿的 init。
 - 清理确认后原活动任务进入 `interrupted`，旧审批过期；不会自动重放工具。用户选择“继续执行”才从 checkpoint 创建新 attempt。原 queued 任务仍按 FIFO 调度。
 - 旧版活动 attempt 没有账本，或进程树未退出、归属不匹配、检查权限不足、关闭状态不能落库时，启动和调度停止并保留锁与证据。
 
@@ -172,7 +176,9 @@ curl -N -H 'Accept: text/event-stream' \
 
 ```sh
 npm run typecheck
-PERSONAL_AGENT_SSE_REAL_SOCKETS=1 npm test -- --maxWorkers=1 --minWorkers=1
+PERSONAL_AGENT_SSE_REAL_SOCKETS=1 \
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+npm test -- --maxWorkers=1 --minWorkers=1
 npm run smoke
 npm run demo -- --check
 npm run build

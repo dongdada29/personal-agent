@@ -4,7 +4,9 @@
 
 ## 安装与环境检查
 
-需要 Node.js 22.18 或更高、npm、Git、可用磁盘空间，以及到官方 npm 注册表的正常 TLS 连接。运行需要 macOS/Linux POSIX 进程能力；macOS 有实机证据，Linux 需重新验收，Windows 当前返回 `PROCESS_UNSUPPORTED`。
+需要 Node.js 22.18 或更高、npm、Git、可用磁盘空间，以及到官方 npm 注册表的正常 TLS 连接。运行需要 macOS/Linux POSIX 进程能力；macOS 历史证据与 [Linux 云端验收](linux-cloud-acceptance.md) 分开记录，Windows 当前返回 `PROCESS_UNSUPPORTED`。
+
+本项目后续开发与验收在 Codex Linux 云端工作区完成，不依赖 MacBook 或 M1 在线。下文的 loopback 地址属于运行服务的机器；云端命令验收使用 `smoke` 与 `demo -- --check`，不表示用户电脑可以直接访问该地址。工作区会话不等于生产常驻部署；真实模型、HTTPS 和手机跨网仍需分别授权与实测。
 
 ```sh
 node --version
