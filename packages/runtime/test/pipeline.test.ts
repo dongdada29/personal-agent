@@ -613,6 +613,114 @@ describe('development pipeline with independent fixture worktrees and actual ver
     expect(context.store.artifactRecords.some(artifact => artifact.content === 'Second review is malformed')).toBe(true);
   });
 
+  describe('review final response boundaries', () => {
+    const prefix = "I'll review the changed code against the actual Runtime verification records.";
+    const pass = '{"verdict":"pass","blockers":[],"evidence":["Actual Runtime verification passed"]}';
+    const rework = '{"verdict":"rework","blockers":["One required fixture improvement"],"evidence":["details.txt"]}';
+    const prefixedPass = prefix + '\n\n' + pass;
+
+    it.each([
+      ['JSON object', prefixedPass + '\n\n'],
+      ['JSON fence', prefix + '\n\n```json\n' + pass + '\n```\n\n'],
+    ])('completes after a prose preface and one final %s when actual verification passes', async (_format, text) => {
+      const context = fixture();
+      const engine = mockAdapter({ review: [text] });
+      expect(await executeDevelopmentTask({ ...context, adapter: engine.adapter })).toEqual({ status: 'completed', review: JSON.parse(pass) });
+      expect(context.store.verificationRecords.map(record => record.exitCode)).toEqual([0]);
+      expect(context.store.events.filter(event => event.type === 'review.completed').map(event => event.data)).toEqual([
+        expect.objectContaining({ modelVerdict: 'pass', effectiveVerdict: 'pass', verificationPassed: true }),
+      ]);
+      expect(context.store.artifactRecords.some(artifact => artifact.content === text)).toBe(true);
+      expect(context.store.artifactRecords.find(artifact => artifact.name === 'Delivery summary')?.content).toContain('Runtime outcome: completed');
+    });
+
+    it('keeps a prefaced model pass subordinate to failed commands and the single automatic rework limit', async () => {
+      const context = fixture();
+      context.task.verificationCommands!.push({ command: process.execPath, args: ['-e', 'process.exit(12)'] });
+      const engine = mockAdapter({ review: [prefixedPass, prefixedPass] });
+      expect(await executeDevelopmentTask({ ...context, adapter: engine.adapter })).toEqual({ status: 'waiting_human', reason: 'verification_failed', review: JSON.parse(pass) });
+      expect(context.store.verificationRecords.map(record => record.exitCode)).toEqual([0, 12, 0, 12]);
+      expect(context.store.events.filter(event => event.type === 'review.completed').map(event => [event.data.modelVerdict, event.data.effectiveVerdict])).toEqual([
+        ['pass', 'rework'], ['pass', 'rework'],
+      ]);
+      expect(engine.opens.filter(item => item.input?.includes('Stage: development'))).toHaveLength(2);
+      expect(context.store.events.filter(event => event.type === 'task.rework_started')).toHaveLength(1);
+      expect(context.store.artifactRecords.find(artifact => artifact.name === 'Delivery summary')?.content).toContain('exitCode=12');
+    });
+
+    it('honors a prefaced structured rework before allowing a later prefaced pass', async () => {
+      const context = fixture();
+      const engine = mockAdapter({ review: [prefix + '\n\n' + rework, prefixedPass] });
+      expect(await executeDevelopmentTask({ ...context, adapter: engine.adapter })).toEqual({ status: 'completed', review: JSON.parse(pass) });
+      expect(context.store.verificationRecords.map(record => record.exitCode)).toEqual([0, 0]);
+      expect(context.store.events.filter(event => event.type === 'review.completed').map(event => event.data.effectiveVerdict)).toEqual(['rework', 'pass']);
+      expect(context.store.events.filter(event => event.type === 'task.rework_started')).toHaveLength(1);
+      expect([...context.store.stages.values()].filter(stage => stage.name === 'development').map(stage => stage.iteration)).toEqual([0, 1]);
+      expect(engine.opens.find(item => item.input?.includes('Stage: development') && item.input.includes('Iteration: 1'))?.input).toContain('One required fixture improvement');
+    });
+
+    it.each([
+      ['conflicting objects', prefix + '\n\n' + rework + '\n' + pass],
+      ['truncated result', prefix + '\n\n' + pass.slice(0, -1)],
+      ['wrong schema', prefix + '\n\n{"verdict":"pass","blockers":[]}'],
+      ['invalid candidate before a valid pass', prefix + '\n\n{"verdict":"unknown","blockers":[],"evidence":[]}\n' + pass],
+    ])('retains %s as invalid review evidence and waits for a human', async (_case, text) => {
+      const context = fixture();
+      const engine = mockAdapter({ review: [text] });
+      expect(await executeDevelopmentTask({ ...context, adapter: engine.adapter })).toEqual({ status: 'waiting_human', reason: 'review_invalid' });
+      expect(context.store.verificationRecords.map(record => record.exitCode)).toEqual([0]);
+      expect(context.store.events.filter(event => event.type === 'review.invalid')).toHaveLength(1);
+      expect(context.store.events.filter(event => event.type === 'review.completed')).toHaveLength(0);
+      expect(context.store.events.filter(event => event.type === 'task.rework_started')).toHaveLength(0);
+      expect([...context.store.stages.values()].find(stage => stage.name === 'review')?.status).toBe('failed');
+      expect(engine.opens.filter(item => item.input?.includes('Stage: summary'))).toHaveLength(0);
+      expect(context.store.artifactRecords.some(artifact => artifact.content === text)).toBe(true);
+      expect(context.store.artifactRecords.find(artifact => artifact.name === 'Code patch')?.content).toContain('details.txt');
+      expect(context.store.artifactRecords.find(artifact => artifact.name === 'Actual verification results')?.content).toContain('actual fixture verification passed');
+      expect(context.store.artifactRecords.find(artifact => artifact.name === 'Delivery summary')?.content).toContain('invalid structured response');
+    });
+
+    it.each(['message event', 'artifact event'] as const)('does not promote a pass from a separate %s over invalid result text', async source => {
+      const context = fixture();
+      const invalid = prefix + '\n\n{"verdict":"pass","blockers":[]}';
+      const engine = mockAdapter({ prompt: async (_run, input, hooks) => {
+        if (!input.includes('Stage: review')) return undefined;
+        if (source === 'message event') await hooks.onEvent({ type: 'message', text: pass });
+        else await hooks.onEvent({ type: 'artifact', kind: 'markdown', title: 'Separate review verdict', content: pass });
+        return invalid;
+      } });
+      expect(await executeDevelopmentTask({ ...context, adapter: engine.adapter })).toEqual({ status: 'waiting_human', reason: 'review_invalid' });
+      expect(context.store.events.some(event => event.type === 'engine.message' && event.data.text === invalid)).toBe(true);
+      if (source === 'message event') expect(context.store.events.some(event => event.type === 'engine.message' && event.data.text === pass)).toBe(true);
+      else expect(context.store.artifactRecords.some(artifact => artifact.content === pass)).toBe(true);
+      expect(context.store.events.filter(event => event.type === 'review.completed')).toHaveLength(0);
+      expect(context.store.artifactRecords.find(artifact => artifact.name === 'Actual verification results')?.content).toContain('actual fixture verification passed');
+      expect(context.store.artifactRecords.find(artifact => artifact.name === 'Delivery summary')?.content).toContain('review_invalid');
+      expect(engine.opens.filter(item => item.input?.includes('Stage: summary'))).toHaveLength(0);
+    });
+
+    it('rejects a valid pass when the review prompt stops without end_turn', async () => {
+      const context = fixture();
+      const engine = mockAdapter({ review: [prefixedPass] });
+      const open = engine.adapter.open.bind(engine.adapter);
+      engine.adapter.open = async (run, hooks) => {
+        const session = await open(run, hooks);
+        const prompt = session.prompt.bind(session);
+        return { ...session, prompt: async (input, signal) => {
+          const result = await prompt(input, signal);
+          return input.includes('Stage: review') ? { ...result, stopReason: 'max_tokens' } : result;
+        } };
+      };
+      await expect(executeDevelopmentTask({ ...context, adapter: engine.adapter })).rejects.toMatchObject({ code: 'ENGINE_FAILED' });
+      expect(context.store.verificationRecords.map(record => record.exitCode)).toEqual([0]);
+      expect(context.store.events.filter(event => event.type === 'review.completed')).toHaveLength(0);
+      expect([...context.store.stages.values()].find(stage => stage.name === 'review')?.status).toBe('failed');
+      expect(engine.opens.filter(item => item.input?.includes('Stage: summary'))).toHaveLength(0);
+      expect(context.store.artifactRecords.some(artifact => artifact.name === 'Delivery summary')).toBe(false);
+      expect(engine.active).toBe(0);
+    });
+  });
+
   it('cancels the peer after an analysis failure and waits for confirmed peer close before rejecting', async () => {
     const context = fixture();
     const both = deferred(), cleanup = deferred(), peerClosing = deferred();
