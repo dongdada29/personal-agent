@@ -22,6 +22,7 @@ afterEach(() => {
 });
 
 it('reclaims a confirmed non-executing zombie service using the existing recovery guard', () => {
+  Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'linux' });
   const { root, path } = fixture();
   state.inspect.mockReturnValue(false);
   const release = acquireInstanceLock(root);
@@ -33,6 +34,7 @@ it('reclaims a confirmed non-executing zombie service using the existing recover
 });
 
 it('preserves the original service lock when the process state is live or unknown', () => {
+  Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'linux' });
   const { root, path, previous } = fixture();
   state.inspect.mockReturnValue(true);
   expect(() => acquireInstanceLock(root)).toThrowError(expect.objectContaining({ code: 'INSTANCE_LOCKED' }));
@@ -41,6 +43,7 @@ it('preserves the original service lock when the process state is live or unknow
 });
 
 it('refuses reclamation if a PID becomes active or uninspectable during the guarded recheck', () => {
+  Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'linux' });
   const { root, path, previous } = fixture();
   state.inspect.mockReturnValueOnce(false).mockReturnValueOnce(true);
   expect(() => acquireInstanceLock(root)).toThrowError(expect.objectContaining({ code: 'INSTANCE_LOCKED' }));
