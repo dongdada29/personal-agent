@@ -4,7 +4,9 @@
 
 ## 安装与环境检查
 
-需要 Node.js 22.18 或更高、npm、Git、可用磁盘空间，以及到官方 npm 注册表的正常 TLS 连接。运行需要 macOS/Linux POSIX 进程能力；macOS 有实机证据，Linux 需重新验收，Windows 当前返回 `PROCESS_UNSUPPORTED`。
+需要 Node.js 22.18 或更高、npm、Git、可用磁盘空间，以及到官方 npm 注册表的正常 TLS 连接。运行需要 macOS/Linux POSIX 进程能力；macOS 历史证据与 [Linux 云端验收](linux-cloud-acceptance.md) 分开记录，Windows 当前返回 `PROCESS_UNSUPPORTED`。
+
+本项目后续开发与验收在 Codex Linux 云端工作区完成，不依赖 MacBook 或 M1 在线。下文的 loopback 地址属于运行服务的机器；云端命令验收使用 `smoke` 与 `demo -- --check`，不表示用户电脑可以直接访问该地址。工作区会话不等于生产常驻部署；真实模型、HTTPS 和手机跨网仍需分别授权与实测。
 
 ```sh
 node --version
@@ -111,6 +113,8 @@ npm run fixture
 5. 查看双分析、开发、实际验证、审查和汇总。planner/reviewer 使用 plan，developer 使用 default；Runtime 保存真实 exitCode/stdout/stderr，模型“通过”不能覆盖实际验证失败。
 6. 出现工具审批时先检查完整输入、路径和 diff，再明确允许或拒绝。可以暂停、接管或取消等待中的任务，无需先允许工具。
 7. 核对补丁、验证、汇总及保留的 worktree，再接收或退回。宿主 README 的 WIP 不应被修改；接收只改变交付状态。
+
+reviewer 的当前完整回复可以先有纯说明文字，最后必须只有一个完整 JSON 对象或 `json` 代码围栏，字段严格为 `verdict`、`blockers`、`evidence`。前面另有结构化候选、多个对象、重复字段、截断、字段不合法或结果后的说明都会使审查无效；不会从工具日志或成果中寻找一个 pass。合法 pass 仍须满足 Runtime 的实际命令和补丁一致性核验。
 
 审查不合法或一次自动返工后仍未通过，会进入等待处理。worktree 与补丁保留，合并、推送、清理由用户另行操作。文本补丁上限 1 MiB，二进制或过大成果明确失败。worktree 只隔离 Git 修改，不能限制进程对系统的访问，先用自己的非敏感 fixture。
 
