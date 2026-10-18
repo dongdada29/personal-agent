@@ -1,0 +1,123 @@
+# Personal Agent
+
+English | [简体中文](README.md)
+
+Turn your own computer into a trustworthy AI development execution node: describe a goal, let multiple agents analyze, code, verify, and review in isolated worktrees, approve or take over whenever needed, and receive patches with real verification records.
+
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Node >=22.18](https://img.shields.io/badge/Node-%3E%3D22.18-339933.svg)](package.json)
+[![CI](https://github.com/dongdada29/personal-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/dongdada29/personal-agent/actions/workflows/ci.yml)
+
+![Personal Agent demo](docs/assets/demo.gif)
+
+## Why it exists
+
+Independent developers often want to hand a goal to AI without giving up control over code, verification, approval, and delivery boundaries. Personal Agent keeps task history, agent roles, runtime verification, and human intervention in one local workbench: AI can execute, while the human can inspect, pause, approve, take over, and decide whether the result is accepted.
+
+## Core features
+
+- **Isolated worktree execution**: Claude tasks start from a fixed Git HEAD in a separate worktree and do not overwrite host work-in-progress.
+- **Multi-agent pipeline**: planner, developer, and reviewer agents analyze, modify, verify, review, and summarize in stages.
+- **Real verification evidence**: the runtime launches verification commands and records exit codes, stdout/stderr, and attempts.
+- **Human controls and approvals**: add instructions, pause after a stage, take over immediately, resume, return for rework, and resolve tool approvals.
+- **Durable events and recovery**: SQLite stores tasks, events, approvals, artifacts, and process ownership records; closing the page does not cancel work.
+- **No-account fake demo**: the fake engine demonstrates the state flow in a temporary data directory without calling a real model.
+- **Paired remote access path**: the author's instance is online through Cloudflare Named Tunnel in paired mode; full physical-phone mobile-network acceptance still needs target-environment validation.
+
+## Five-minute local demo
+
+Install Node.js **22.18 or newer**, npm, and Git, then run:
+
+```sh
+npm ci --ignore-scripts --registry=https://registry.npmjs.org --strict-ssl=true
+npm run build
+npm run smoke
+npm run demo
+```
+
+Open the URL printed by the terminal, usually <http://127.0.0.1:47811/?demo=fake>. The standalone demo uses temporary data, the fake engine, and a port separate from the persistent service. Create a demo task, inspect events, artifacts, and controls, then accept the result.
+
+## Architecture
+
+```mermaid
+flowchart TD
+  Browser[Browser workbench] -->|Loopback HTTP / explicit HTTPS pairing| Server[Fastify API and SSE]
+  Server --> Store[(SQLite tasks / events / approvals / process ledger)]
+  Server --> Runner[FIFO runner and checkpoints]
+  Runner --> Analysis[planner + reviewer parallel analysis]
+  Analysis --> Developer[developer implementation]
+  Developer --> Verify[Runtime verification]
+  Verify --> Review[Structured review]
+  Review --> Summary[Summary and deliverables]
+  Runner --> Worktree[Fixed HEAD / isolated worktree]
+  Runner --> Engine[EngineAdapter]
+  Engine --> ACP[stdio ACP owner process group]
+  ACP --> Fake[fake fixture]
+  ACP --> Claude[local Claude ACP]
+  Server --> Control[pause / take over / resume / accept / return]
+  Control --> Runner
+```
+
+## Screenshots
+
+| Create task | Events and controls |
+| --- | --- |
+| ![Create task](docs/assets/desktop-create-task.png) | ![Events and controls](docs/assets/desktop-events-approval.png) |
+
+| Artifacts and verification | 390px mobile viewport |
+| --- | --- |
+| ![Artifacts and verification](docs/assets/desktop-artifacts-verification.png) | ![390px mobile viewport](docs/assets/mobile-390.png) |
+
+## Details
+
+### Current status
+
+The current release is **v0.1.0** at baseline `eeeca3c`. The full isolated test command covers **753 tests across 37 files**. This branch is considered current only after CI passes on Ubuntu and macOS with Node 22.18.0 and 24.x. Automated tests use temporary Git repositories, fake/mock engines, verification subprocesses, and virtual devices; they do not call real models or authorize real devices.
+
+The workbench supports narrow screens and defaults to loopback access. Public access must use paired mode behind an HTTPS reverse proxy or Cloudflare Named Tunnel. The author's instance is online through Named Tunnel and paired mode; physical-phone mobile-network flows for create, approve, take over, reconnect, accept, and revoke still need target-environment acceptance. Windows process management is unsupported, and a single-machine deployment has no redundancy or automatic failover.
+
+### What it can do
+
+| Capability | Current behavior |
+| --- | --- |
+| Task creation | fake demo; Claude uses local native credentials and runs in an isolated Git worktree |
+| Execution visibility | durable events, agent stages, real verification output, patches, and summaries; SSE gaps can be replayed |
+| Human control | add instructions, pause after stage, take over immediately, resume, retry, and cancel |
+| Approval and delivery | tool requests wait for explicit allow/deny; completed tasks can be accepted or returned for rework |
+| Restart recovery | registered process ownership is verified; active tasks become interrupted and resume only on user request |
+| Instance settings | agent profiles and timeouts; a task snapshots settings at creation time |
+| Device access | explicit paired mode, one-time pairing, CSRF protection, and device revocation; loopback by default |
+
+A single instance runs one task at a time in FIFO order, with up to two engine sessions during analysis. `completed` means execution ended; `accepted` means the human accepted delivery. Accepting a result does not commit, merge, push, or deploy code. Worktree isolation protects Git changes, not the operating system.
+
+### Verification and delivery boundaries
+
+```sh
+npm run doctor
+npm run demo -- --check
+npm run typecheck
+PERSONAL_AGENT_SSE_REAL_SOCKETS=1 \
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+npm test -- --maxWorkers=1 --minWorkers=1
+npm run smoke
+npm run build
+npm run share:check
+```
+
+`share:check` must run inside a Git checkout and checks tracked files only. Source archives without `.git` should be verified with their SHA-256 manifest instead.
+
+Historical acceptance records are preserved by date: the 2026-10-06 and 2026-10-07 macOS/M1 605-test results describe those commits and machines only, and do not replace the current v0.1.0 / `eeeca3c` CI. Historical commands and boundaries are in [local delivery acceptance](docs/delivery-acceptance.md), later Linux records are in [Linux cloud acceptance](docs/linux-cloud-acceptance.md), and sharing guidance is in [sharing and evidence](docs/sharing.md).
+
+### Engineering and license
+
+| Directory | Responsibility |
+| --- | --- |
+| `apps/server` | Fastify 5 API, SSE, same-origin Web serving, instance lock, and startup recovery |
+| `apps/web` | React 18 / Vite 5 / Antd 5 browser workbench |
+| `packages/contracts` | shared types, task state machine, and error contracts |
+| `packages/runtime` | Node SQLite, ACP, worktrees, pipeline, verification, checkpoints, and process ledger |
+| `scripts` | local demo, fixture, restricted Claude probe, backup check, and explicit pairing operations |
+
+The project uses npm workspaces and TypeScript ESM. Dependencies are locked by `package-lock.json`; ACP SDK is **1.3.0** and Claude ACP is **0.65.0**. Model credentials are read by the engine from native local configuration. The project does not provide login or credential migration and does not require model secrets in `.env`.
+
+The source is published in the [GitHub repository](https://github.com/dongdada29/personal-agent) on `main`; this showcase targets **v0.1.0** (`eeeca3c`). The project declares [Apache License 2.0](LICENSE) and preserves fixed-source attribution in [NOTICE](NOTICE). Dependencies keep their own licenses; see [third-party license notes](docs/third-party-licenses.md). Architecture notes and sharing checks are in [sharing](docs/sharing.md). Scope is tracked in the [MVP plan](plans/personal-agent-mvp-plan.md), with historical evidence in [phase 1](docs/phase1-acceptance.md), [phase 2](docs/phase2-acceptance.md), [phase 3](docs/phase3-acceptance.md), and [phase 4](docs/phase4-acceptance.md).

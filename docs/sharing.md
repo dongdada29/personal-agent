@@ -1,6 +1,6 @@
 # 分享与交付证据
 
-源码已发布到 [GitHub 仓库](https://github.com/dongdada29/personal-agent) 的 `main`，完整源码发布基线为 [`def4a213`](https://github.com/dongdada29/personal-agent/commit/def4a2138c33f8ee46840e3f388e637e80ea511f)。使用入口是 [README](../README.md)，首次体验用无模型 demo。分享材料应说明实际运行条件、验证范围和限制；源码发布不表示已经安装公网入口。
+源码已发布到 [GitHub 仓库](https://github.com/dongdada29/personal-agent) 的 `main`，当前展示基线为 **v0.1.0**（`eeeca3c`）。使用入口是 [README](../README.md)，首次体验用无模型 demo。项目以 Apache-2.0 开源；作者实例已通过 Cloudflare Named Tunnel 在 paired 模式下上线。分享材料仍需说明实际运行条件、验证范围和限制，不能把 fake、CI、真实模型和实体手机移动网络验收混为一层证据。
 
 ## 已验证与待验证
 
@@ -10,20 +10,21 @@
 | Claude 最小开发 | greeting fixture 的真实多阶段执行、补丁和实际测试，见 [阶段二](phase2-acceptance.md) | 绑定当时主机的 provider，不保证其他机器认证 |
 | 控制与恢复 | 暂停/接管/继续、审批、旧 attempt、实际崩溃和归属核验，见 [阶段三](phase3-acceptance.md) | 单机持久恢复，不是容灾或自动重放 |
 | 鉴权与工作台 | 撤销、CSRF、SSE-auth、390px/1600px 隔离浏览器，见 [阶段四](phase4-acceptance.md) | 测试设备与 HTTP 开发模式，不是生产手机或 TLS 验收 |
-| 历史全量 | macOS arm64、Node 22.18.0/24.18.0：530 项、29 文件、无跳过 | 不推广到新提交或新主机 |
+| 当前 CI | v0.1.0（`eeeca3c`）：Ubuntu 与 macOS、Node 22.18.0 与 24.x 跑 typecheck、753 项 / 37 文件全量测试、build、doctor、smoke、demo check、share check | fake/mock 与虚拟设备覆盖自动路径；不证明真实模型能力或实体手机移动网络流程 |
+| 历史全量 | macOS arm64、Node 22.18.0/24.18.0：530 项、29 文件、无跳过 | 历史验收，不推广到新提交或新主机 |
 | 2026-10-06 交付 | `8ac1c02`：MacBook 两个 Node 版本与 M1 独立目录各 605 项、33 文件、无跳过；Chrome fake 与 M1 探针，见 [当日报告](delivery-acceptance-2026-10-06.md) | 历史证据；断网/401 为拦截模拟，390px 不是实体手机 |
 | 2026-10-07 收尾 | `39fe311` 干净独立安装、Node 24.18.0 全量 605/605、doctor/smoke/HTTP demo、fake 中断重试和冷恢复；当日真实 fixture 5 阶段/5 AgentRun、Runtime 3/3、8 成果，见 [当日报告](delivery-acceptance.md) | 历史本机结果；真实任务复用当日既有证据；M1 生产未升级或故障注入 |
 | Linux 云端 | Codex 工作区的独立安装与检查，见 [云端验收记录](linux-cloud-acceptance.md) | 使用临时数据、fake/mock 与虚拟身份；不借用旧 macOS 通过结果 |
 | HTTP 正式启动 | loopback HTTP fake 任务及 SQLite 一致性可单独验收 | 不等于局域网或移动网络访问 |
-| 远程使用 | paired 代码和 Named Tunnel 占位说明已准备 | 真实 HTTPS、固定域名、手机移动网络流程待配置和验收 |
+| 远程使用 | 作者实例已通过 Cloudflare Named Tunnel 在 paired 模式下上线；示例文档统一使用 `https://agent.example.com` | 实体手机移动网络完整流程仍需在目标设备与网络上单独验收 |
 | 操作系统 | macOS arm64 历史证据与 Linux 云端结果分别记录 | 其他目标机器需复验，Windows 进程管理未适配 |
 | 持续可用性 | 持久事件、幂等控制与恢复门禁 | 无冗余、故障切换、自动运维或零停机升级 |
 
 新增验收记录日期、提交 SHA、OS/架构、Node 版本、完整命令、测试数、退出码/跳过数、真实 socket 与模型范围及清理结果。历史阶段记录保留原结论；当前结果放新验收记录，不改写历史。
 
-完整中文分享初稿为 [让 Agent 接得住任务：一台电脑上的执行、接管与恢复](article-draft.zh-CN.md)，已随 Apache-2.0 项目源码发布；独立文章发布与推广仍需单独决定。
+完整中文分享初稿为 [让 Agent 接得住任务：一台电脑上的执行、接管与恢复](article-draft.zh-CN.md)，已随 Apache-2.0 项目源码发布；对外文章发布与推广可按需要单独安排。
 
-后续开发与验收在 Codex Linux 云端工作区完成，不依赖用户 MacBook 或 M1 在线。该工作区会话不构成生产永久在线或公开部署承诺；真实模型、浏览器、HTTPS 和手机跨网需独立证据。
+后续开发与验收在云端工作区完成，不依赖用户 MacBook 或 M1 在线。云端工作区会话不构成生产永久在线承诺；真实模型能力、浏览器人工路径和手机跨网仍需各自证据。
 
 ## 可复现演示
 
