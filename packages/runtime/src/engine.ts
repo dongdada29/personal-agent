@@ -91,7 +91,8 @@ export interface EngineAdapter {
 export type EngineErrorCode =
   | 'ENGINE_FAILED' | 'AUTH_REQUIRED' | 'STARTUP_TIMEOUT' | 'PROMPT_TIMEOUT'
   | 'ABORTED' | 'SESSION_CLOSED' | 'SESSION_BUSY' | 'MODE_UNSUPPORTED'
-  | 'PERMISSION_UNKNOWN' | 'PERMISSION_OPTION' | 'EVENT_FAILURE' | 'CLEANUP_FAILED' | 'PROBE_CONFIG_UNSAFE' | 'PROCESS_UNSUPPORTED';
+  | 'PERMISSION_UNKNOWN' | 'PERMISSION_OPTION' | 'EVENT_FAILURE' | 'CLEANUP_FAILED' | 'PROBE_CONFIG_UNSAFE' | 'PROCESS_UNSUPPORTED'
+  | 'REAL_ENGINE_DISABLED';
 
 /** Safe diagnostics contain no raw engine stderr, protocol payloads or credentials. */
 export class EngineError extends Error {

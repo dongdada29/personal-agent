@@ -501,6 +501,8 @@ export interface AuthSession {
   mode: 'loopback' | 'paired';
   device?: Device;
   csrfToken?: string;
+  /** Present only on a server-enforced fake-only demo instance. */
+  demo?: 'fake';
 }
 
 /** The plaintext ticket is returned only by its initial issuance. */

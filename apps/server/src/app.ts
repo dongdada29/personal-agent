@@ -7,28 +7,40 @@ import type { CreateTaskCommand, TaskControlCommand, InstanceSettings, AgentRole
 import { acquireInstanceLock } from './instance-lock.js';
 import { createTaskEventStream } from './sse.js';
 import { installAccessControl, validateSecurityConfig } from './access-control.js';
+import { validateDemoConfig, type DemoModeInput } from './demo-mode.js';
 
 export interface AppOptions {
   dataDir: string;
   autoRun?: boolean;
   adapter?: EngineAdapter;
+  /** 在 demo 模式下被忽略：fake-only 实例从不持有真实 adapter。 */
   realAdapter?: EngineAdapter;
   port?: number;
   webRoot?: string;
   security?: AuthSecurityConfig;
+  /** 公开 fake-only 演示；与 paired security 互斥，只应由 scripts/demo.ts 设置。 */
+  demo?: DemoModeInput;
 }
+
+const demoFakeOnly = (message: string) => ({ code: 'DEMO_FAKE_ONLY', message });
 
 export async function buildApp(options: AppOptions) {
   if (options.security) validateSecurityConfig(options.security);
+  const demo = options.demo ? validateDemoConfig(options.demo) : undefined;
+  if (demo && options.security) throw Object.assign(new Error('Demo mode cannot be combined with paired access'), { code: 'DEMO_CONFIG_INVALID' });
   const releaseLock = acquireInstanceLock(options.dataDir);
   let store!: TaskStore;
   let authStore!: AuthStore;
   try {
-    store = new TaskStore(resolve(options.dataDir, 'personal-agent.sqlite'));
+    store = new TaskStore(resolve(options.dataDir, 'personal-agent.sqlite'), { fakeOnly: demo !== undefined });
     authStore = new AuthStore(store.filename);
     if (options.security) authStore.enforcePolicy(validateSecurityConfig(options.security));
     const saved = authStore.policy();
     if (saved) validateSecurityConfig(saved);
+    if (demo && saved) throw Object.assign(new Error('Demo mode requires a disposable data directory without paired policy'), { code: 'DEMO_CONFIG_INVALID' });
+    if (demo && (store.workspaces().length || store.list().some(task => task.engine === 'claude'))) {
+      throw Object.assign(new Error('Demo mode requires a disposable data directory without real workspaces or tasks'), { code: 'DEMO_CONFIG_INVALID' });
+    }
   } catch (error) { authStore?.close(); store?.close(); releaseLock(); throw error; }
   let initializingRunner: TaskRunner | undefined;
   let initializingApp: ReturnType<typeof Fastify> | undefined;
@@ -41,7 +53,7 @@ export async function buildApp(options: AppOptions) {
     await recoverOwnedProcesses(store.processes(), record => store.closeProcess(record));
     recoveryConfirmed = true;
     store.interruptActive();
-    const runner = new TaskRunner(store, options.dataDir, options.adapter, options.realAdapter);
+    const runner = new TaskRunner(store, options.dataDir, options.adapter, demo ? undefined : options.realAdapter, { fakeOnly: demo !== undefined });
     initializingRunner = runner;
     const taskOperations = new Map<string, Promise<unknown>>();
     async function serialTask<T>(id: string, work: () => Promise<T>): Promise<T> {
@@ -59,7 +71,17 @@ export async function buildApp(options: AppOptions) {
       finally { try { authStore.close(); store.close(); } finally { if (!runner.isBlocked) releaseLock(); } }
     });
     const port = options.port ?? 47801;
-    const access = installAccessControl(app, authStore, port);
+    const access = installAccessControl(app, authStore, port, undefined, { demoPublicOrigin: demo?.publicOrigin, fakeOnlyDemo: demo !== undefined });
+    if (demo) {
+      // 隧道后的访客都表现为 loopback 客户端，无法可靠区分来源，所以按实例全局限速；
+      // 按访客限速请在 Cloudflare 侧配置。该 hook 在访问控制之后注册，只统计已放行的写请求。
+      let windowStart = Date.now(), mutations = 0;
+      app.addHook('onRequest', async (request, reply) => {
+        if (['GET', 'HEAD'].includes(request.method)) return;
+        if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); mutations = 0; }
+        if (++mutations > demo.mutationsPerMinute) return reply.code(429).send({ code: 'DEMO_RATE_LIMIT', message: 'This public demo is busy; try again in a minute' });
+      });
+    }
     app.setErrorHandler((error, _request, reply) => {
       const status = error.statusCode && error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : 500;
       reply.code(status).send({ code: status === 500 ? 'INTERNAL_ERROR' : error.code ?? 'BAD_REQUEST',
@@ -67,7 +89,7 @@ export async function buildApp(options: AppOptions) {
     });
     app.get('/api/health', async (_request, reply) => {
       if (runner.isBlocked) reply.code(503);
-      return { status: runner.isBlocked ? 'blocked' : 'ok', engines: ['fake', 'claude'], phase: 4 };
+      return { status: runner.isBlocked ? 'blocked' : 'ok', engines: demo ? ['fake'] : ['fake', 'claude'], phase: 4, ...(demo ? { demo: 'fake' } : {}) };
     });
     app.post<{ Body: CreateTaskCommand }>('/api/tasks', {
       schema: { body: { type: 'object', additionalProperties: false, required: ['commandId', 'goal'], properties: {
@@ -83,9 +105,16 @@ export async function buildApp(options: AppOptions) {
         } },
       } } },
     }, async (request, reply) => {
+      // 检查放在已路由的 handler 内：/api/%74asks 等编码变体被 Fastify 路由到这里，同样会被拦截。
+      if (demo && ((request.body.engine ?? 'fake') !== 'fake' || request.body.workspaceId !== undefined || request.body.verificationCommands !== undefined)) {
+        return reply.code(403).send(demoFakeOnly('此公开演示只运行 fake 引擎，不接受仓库或验证命令；真实开发任务请在自己的持久实例中创建。'));
+      }
       const replay = store.replayCreation(request.body);
       if (replay) return reply.code(200).send(replay);
       if (runner.isBlocked) return reply.code(503).send({ code: 'RUNNER_BLOCKED', message: 'Engine cleanup or persistence needs attention' });
+      if (demo && store.list().length >= demo.maxTasks) {
+        return reply.code(429).send({ code: 'DEMO_TASK_LIMIT', message: '演示实例的任务数已达上限，请稍后再来（演示重启后数据会重置）。' });
+      }
       let baselineSha: string | undefined;
       if (request.body.engine === 'claude') {
         if (!request.body.workspaceId || !request.body.verificationCommands?.length) return reply.code(400).send({ code: 'REAL_TASK_INPUT', message: 'Claude tasks require a registered workspace and explicit verification commands' });
@@ -109,6 +138,8 @@ export async function buildApp(options: AppOptions) {
         name: { type: 'string', minLength: 1, maxLength: 200, pattern: '\\S' }, path: { type: 'string', minLength: 1, maxLength: 4096 },
       } } },
     }, async (request, reply) => {
+      // inspectWorkspace 会对请求路径运行 git，因此必须在它之前拒绝。
+      if (demo) return reply.code(403).send(demoFakeOnly('此公开演示不注册代码仓库。'));
       const replay = store.replayWorkspaceRegistration(request.body);
       if (replay) return reply.code(200).send(replay);
       const inspected = await inspectWorkspace(request.body.path);
@@ -189,13 +220,21 @@ export async function buildApp(options: AppOptions) {
         agentRunTimeoutMs: { type: 'integer', minimum: 1000, maximum: 1_800_000 },
         verificationTimeoutMs: { type: 'integer', minimum: 1000, maximum: 1_800_000 },
       } } },
-    }, async request => store.updateSettings(request.body));
+    }, async (request, reply) => {
+      if (demo && request.body.defaultEngine !== undefined && request.body.defaultEngine !== 'fake') {
+        return reply.code(403).send(demoFakeOnly('此公开演示的默认引擎固定为 fake。'));
+      }
+      return store.updateSettings(request.body);
+    });
     app.get('/api/agents', async () => ({ agents: store.profiles() }));
     app.post<{ Body: { commandId: string; name: string; role: AgentRole; model?: string; instructions: string } }>('/api/agents', {
       schema: { body: { type: 'object', additionalProperties: false, required: ['commandId', 'name', 'role', 'instructions'], properties: {
         ...profileFields, role: { type: 'string', enum: ['planner', 'developer', 'reviewer'] },
       } } },
     }, async (request, reply) => {
+      if (demo && store.profiles().length >= demo.maxProfiles) {
+        return reply.code(429).send({ code: 'DEMO_PROFILE_LIMIT', message: '演示实例的 Agent 配置数已达上限。' });
+      }
       const result = store.saveProfile(request.body);
       return reply.code(201).send(result);
     });

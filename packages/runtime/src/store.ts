@@ -19,6 +19,11 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof
 type Row = Record<string, unknown>;
 const now = () => new Date().toISOString();
 
+/** fake-only 实例拒绝真实执行相关写入；statusCode 让 HTTP 层返回 4xx 而非 500。 */
+export function demoFakeOnlyError(message = 'This fake-only demo never runs real engines, repositories or verification commands'): Error {
+  return Object.assign(new Error(message), { statusCode: 403, code: 'DEMO_FAKE_ONLY' });
+}
+
 /** Compare command payloads structurally, including pre-migration fingerprints. */
 function canonical(value: unknown): string {
   const normalize = (item: unknown): unknown => Array.isArray(item) ? item.map(normalize)
@@ -55,7 +60,14 @@ export class TaskStore {
   private readonly committedEvents: TaskEvent[] = [];
   private publishing = false;
 
-  constructor(public readonly filename: string) {
+  /**
+   * fakeOnly 是公开 fake 演示的存储层兜底：即使 HTTP 层守卫被绕过，
+   * 也无法写入 claude 任务、注册仓库路径或把默认引擎改为 claude。
+   */
+  readonly fakeOnly: boolean;
+
+  constructor(public readonly filename: string, options: { fakeOnly?: boolean } = {}) {
+    this.fakeOnly = options.fakeOnly === true;
     if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true });
     this.db = new DatabaseSync(filename);
     try {
@@ -127,6 +139,8 @@ export class TaskStore {
   }
 
   create(command: CreateTaskCommand, baselineSha?: string): { task: Task; created: boolean } {
+    if (this.fakeOnly && (command.engine !== undefined && command.engine !== 'fake' || command.workspaceId !== undefined
+      || command.verificationCommands !== undefined || baselineSha !== undefined)) throw demoFakeOnlyError();
     return this.transaction(() => {
       const request = this.creationRequest(command);
       const previous = this.replayCommand<Task>(command.commandId, request);
@@ -174,6 +188,7 @@ export class TaskStore {
   }
 
   registerWorkspace(path: string, name: string, commandId?: string, requestedPath = path): Workspace {
+    if (this.fakeOnly) throw demoFakeOnlyError('This fake-only demo does not register repositories');
     return this.transaction(() => {
       const request = JSON.stringify({ action: 'register_workspace', name, path: requestedPath });
       if (commandId) {
@@ -589,6 +604,7 @@ export class TaskStore {
   }
 
   updateSettings(command: { commandId: string; defaultEngine?: InstanceSettings['defaultEngine']; agentRunTimeoutMs?: number; verificationTimeoutMs?: number }): InstanceSettings {
+    if (this.fakeOnly && command.defaultEngine !== undefined && command.defaultEngine !== 'fake') throw demoFakeOnlyError('This fake-only demo keeps fake as the default engine');
     return this.transaction(() => {
       const { commandId, ...patch } = command;
       const request = JSON.stringify({ action: 'settings', ...patch });

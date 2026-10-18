@@ -176,7 +176,7 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
 }
 
 export function App({ session }: { session: AuthSession }) {
-  const fakeDemo = isFakeDemo(window.location.search);
+  const fakeDemo = isFakeDemo(window.location.search, session);
   const [view, setView] = useState<'workbench' | 'settings' | 'devices'>('workbench');
   const [goal, setGoal] = useState('');
   const [requestedEngine, setEngine] = useState<'fake' | 'claude'>('fake');
