@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { terminateEngineProcessTree } from '../src/engine-process.js';
+import { processRunning as alive } from './helpers/process-observation.js';
 import { recoverOwnedProcesses, spawnOwnedProcess, verifyProcessOwner, processOwnerWrapperPath,
   type OwnedProcessRecord } from '../src/process-registry.js';
 
@@ -27,7 +28,6 @@ vi.mock('node:child_process', async importOriginal => {
   return { ...actual, execFile };
 });
 const owners: Array<ReturnType<typeof spawnOwnedProcess>> = [];
-const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });

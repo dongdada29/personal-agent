@@ -1,8 +1,8 @@
 # 许可证与源码分享范围
 
-项目当前在 [LICENSE](../LICENSE) 与 package metadata 中声明 Apache-2.0；公开发布待用户批准，本轮仅准备本地源码材料，未发布或改变许可。第三方依赖保留各自的许可证或使用条款；项目许可不重新授权这些依赖、模型服务或第三方执行文件。
+项目在 [LICENSE](../LICENSE) 与 package metadata 中声明 Apache-2.0；完整源码已于 2026-10-08 发布到 [GitHub 仓库](https://github.com/dongdada29/personal-agent) 的 `main`，发布基线为 [`def4a213`](https://github.com/dongdada29/personal-agent/commit/def4a2138c33f8ee46840e3f388e637e80ea511f)，许可保持不变。第三方依赖保留各自的许可证或使用条款；项目许可不重新授权这些依赖、模型服务或第三方执行文件。
 
-本轮检查日期为 2026-10-06，依据本工程 `package-lock.json` 和已安装包的许可文件。以下内容用于准备本地源码分享材料；尚未公开发布源码、安装包或网站。
+以下许可核对记录日期为 2026-10-06，依据当时的 `package-lock.json` 和已安装包的许可文件。后续源码公开发布没有扩大这次核对的范围；预构建安装包或网站的分发仍需针对实际内容另行审核。
 
 ## 固定移植来源
 

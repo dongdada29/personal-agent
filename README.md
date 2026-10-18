@@ -6,7 +6,7 @@ Claude 任务以选定 Git HEAD 创建独立 worktree，经过双 Agent 分析�
 
 ## 首次本地演示
 
-准备 Node.js **22.18 或更高**、npm 和 Git。当前进程管理支持 macOS/Linux POSIX；已验证的平台是 macOS arm64，Linux 需在目标机器复验，Windows 暂不支持启动。
+准备 Node.js **22.18 或更高**、npm 和 Git。当前进程管理支持 macOS/Linux POSIX；macOS arm64 的历史结果与 [Linux 云端验收](docs/linux-cloud-acceptance.md) 分开记录，其他目标机器仍需复验，Windows 暂不支持启动。
 
 在取得的源码目录运行：
 
@@ -48,7 +48,9 @@ npm run demo
 npm run doctor
 npm run demo -- --check
 npm run typecheck
-PERSONAL_AGENT_SSE_REAL_SOCKETS=1 npm test -- --maxWorkers=1 --minWorkers=1
+PERSONAL_AGENT_SSE_REAL_SOCKETS=1 \
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+npm test -- --maxWorkers=1 --minWorkers=1
 npm run smoke
 npm run build
 ```
@@ -57,7 +59,9 @@ npm run build
 
 源码维护者在 Git 检出目录执行 `npm run share:check`，只检查跟踪文件。接收无 `.git` 的源码归档时按提供的 SHA-256 清单核验，无需运行此维护命令。
 
-2026-10-07 从 `39fe311` 的干净源码在独立目录完成 `npm ci`、类型检查、构建与 **605/605、33 文件、零跳过**全量回归，本机 macOS arm64 / Node 24.18.0 的 doctor、smoke、HTTP demo、fake 中断/重试和冷备份恢复均通过。今日真实 greeting fixture 完成 5 阶段、5 次 AgentRun、Runtime 3/3 测试与 8 项成果，浏览器接收、刷新重选和正常服务重启后记录保持一致。10 月 6 日三环境全量结果单独保留为历史证据。完整命令和边界见 [本次交付验收](docs/delivery-acceptance.md)，分享材料见 [分享与证据清单](docs/sharing.md)。
+2026-10-07 从 `39fe311` 的干净源码在独立目录完成 `npm ci`、类型检查、构建与 **605/605、33 文件、零跳过**全量回归，本机 macOS arm64 / Node 24.18.0 的 doctor、smoke、HTTP demo、fake 中断/重试和冷备份恢复均通过。当日真实 greeting fixture 完成 5 阶段、5 次 AgentRun、Runtime 3/3 测试与 8 项成果，浏览器接收、刷新重选和正常服务重启后记录保持一致。10 月 6 日三环境全量结果单独保留为历史证据。历史命令和边界见 [本机交付验收](docs/delivery-acceptance.md)，后续结果见 [Linux 云端验收](docs/linux-cloud-acceptance.md)，分享材料见 [分享与证据清单](docs/sharing.md)。
+
+后续开发与测试在 Codex Linux 云端工作区完成，不依赖用户 MacBook 或 M1 在线。云端验收使用临时数据和 fake/mock 引擎，不读取真实模型凭据；旧 macOS 结果不能作为 Linux 通过证据。Codex 工作区会话用于开发与验收，不提供生产永久在线、自动部署或持续公网访问保证。
 
 真实 HTTPS、Named Tunnel、手机移动网络完整流程和系统自启动尚待单独配置及验收。服务固定监听 `127.0.0.1:47801`，默认免登录本地模式不得直接转发到公网。设备配对、代理配置及原数据迁移见 [设备访问说明](docs/device-access.md)。
 
@@ -73,4 +77,4 @@ npm run build
 
 npm workspaces / TypeScript ESM；依赖由 `package-lock.json` 固定，ACP SDK **1.3.0**、Claude ACP **0.65.0**。模型凭据由引擎使用其本机原生配置，本项目不提供登录或凭据搬运服务。
 
-项目当前声明 [Apache License 2.0](LICENSE)，并保留固定来源 [NOTICE](NOTICE)；公开仓库发布仍待用户批准，本轮仅准备本地源码草稿。依赖采用各自许可，完整分发边界见 [第三方许可说明](docs/third-party-licenses.md)。架构、讲解提纲和分享检查见 [分享说明](docs/sharing.md)。实施边界见 [MVP 计划](plans/personal-agent-mvp-plan.md)，历史证据见 [阶段一](docs/phase1-acceptance.md)、[阶段二](docs/phase2-acceptance.md)、[阶段三](docs/phase3-acceptance.md)、[阶段四](docs/phase4-acceptance.md)。
+项目源码已发布到 [GitHub 仓库](https://github.com/dongdada29/personal-agent) 的 `main`，完整源码发布基线为 [`def4a213`](https://github.com/dongdada29/personal-agent/commit/def4a2138c33f8ee46840e3f388e637e80ea511f)。项目声明 [Apache License 2.0](LICENSE)，并保留固定来源 [NOTICE](NOTICE)。依赖采用各自许可，完整分发边界见 [第三方许可说明](docs/third-party-licenses.md)。架构、讲解提纲和分享检查见 [分享说明](docs/sharing.md)。实施边界见 [MVP 计划](plans/personal-agent-mvp-plan.md)，历史证据见 [阶段一](docs/phase1-acceptance.md)、[阶段二](docs/phase2-acceptance.md)、[阶段三](docs/phase3-acceptance.md)、[阶段四](docs/phase4-acceptance.md)。

@@ -1,6 +1,6 @@
 # 分享与交付证据
 
-源码交付入口是 [README](../README.md)，首次体验用无模型 demo。分享材料应说明实际运行条件、验证范围和限制；本指南不表示代码已经公开发布、推送或安装公网入口。
+源码已发布到 [GitHub 仓库](https://github.com/dongdada29/personal-agent) 的 `main`，完整源码发布基线为 [`def4a213`](https://github.com/dongdada29/personal-agent/commit/def4a2138c33f8ee46840e3f388e637e80ea511f)。使用入口是 [README](../README.md)，首次体验用无模型 demo。分享材料应说明实际运行条件、验证范围和限制；源码发布不表示已经安装公网入口。
 
 ## 已验证与待验证
 
@@ -12,15 +12,18 @@
 | 鉴权与工作台 | 撤销、CSRF、SSE-auth、390px/1600px 隔离浏览器，见 [阶段四](phase4-acceptance.md) | 测试设备与 HTTP 开发模式，不是生产手机或 TLS 验收 |
 | 历史全量 | macOS arm64、Node 22.18.0/24.18.0：530 项、29 文件、无跳过 | 不推广到新提交或新主机 |
 | 2026-10-06 交付 | `8ac1c02`：MacBook 两个 Node 版本与 M1 独立目录各 605 项、33 文件、无跳过；Chrome fake 与 M1 探针，见 [当日报告](delivery-acceptance-2026-10-06.md) | 历史证据；断网/401 为拦截模拟，390px 不是实体手机 |
-| 2026-10-07 收尾 | `39fe311` 干净独立安装、Node 24.18.0 全量 605/605、doctor/smoke/HTTP demo、fake 中断重试和冷恢复；今日真实 fixture 5 阶段/5 AgentRun、Runtime 3/3、8 成果，见 [今日验收](delivery-acceptance.md) | 今日只重跑本机全量；真实任务复用当日既有证据；M1 生产未升级或故障注入 |
+| 2026-10-07 收尾 | `39fe311` 干净独立安装、Node 24.18.0 全量 605/605、doctor/smoke/HTTP demo、fake 中断重试和冷恢复；当日真实 fixture 5 阶段/5 AgentRun、Runtime 3/3、8 成果，见 [当日报告](delivery-acceptance.md) | 历史本机结果；真实任务复用当日既有证据；M1 生产未升级或故障注入 |
+| Linux 云端 | Codex 工作区的独立安装与检查，见 [云端验收记录](linux-cloud-acceptance.md) | 使用临时数据、fake/mock 与虚拟身份；不借用旧 macOS 通过结果 |
 | HTTP 正式启动 | loopback HTTP fake 任务及 SQLite 一致性可单独验收 | 不等于局域网或移动网络访问 |
 | 远程使用 | paired 代码和 Named Tunnel 占位说明已准备 | 真实 HTTPS、固定域名、手机移动网络流程待配置和验收 |
-| 操作系统 | macOS arm64 有实机运行与测试证据 | Linux 需实机复验，Windows 进程管理未适配 |
+| 操作系统 | macOS arm64 历史证据与 Linux 云端结果分别记录 | 其他目标机器需复验，Windows 进程管理未适配 |
 | 持续可用性 | 持久事件、幂等控制与恢复门禁 | 无冗余、故障切换、自动运维或零停机升级 |
 
 新增验收记录日期、提交 SHA、OS/架构、Node 版本、完整命令、测试数、退出码/跳过数、真实 socket 与模型范围及清理结果。历史阶段记录保留原结论；当前结果放新验收记录，不改写历史。
 
-完整中文分享初稿为 [让 Agent 接得住任务：一台电脑上的执行、接管与恢复](article-draft.zh-CN.md)。本轮只保存本地草稿；项目当前声明 Apache-2.0，公开发布待用户批准。
+完整中文分享初稿为 [让 Agent 接得住任务：一台电脑上的执行、接管与恢复](article-draft.zh-CN.md)，已随 Apache-2.0 项目源码发布；独立文章发布与推广仍需单独决定。
+
+后续开发与验收在 Codex Linux 云端工作区完成，不依赖用户 MacBook 或 M1 在线。该工作区会话不构成生产永久在线或公开部署承诺；真实模型、浏览器、HTTPS 和手机跨网需独立证据。
 
 ## 可复现演示
 
@@ -36,7 +39,9 @@ npm ci --ignore-scripts --registry=https://registry.npmjs.org --strict-ssl=true
 npm run build
 npm run doctor
 npm run typecheck
-PERSONAL_AGENT_SSE_REAL_SOCKETS=1 npm test -- --maxWorkers=1 --minWorkers=1
+PERSONAL_AGENT_SSE_REAL_SOCKETS=1 \
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+npm test -- --maxWorkers=1 --minWorkers=1
 npm run smoke
 npm run demo -- --check
 npm run build
@@ -96,6 +101,8 @@ tar -tzf '<LOCAL_OUTPUT_DIR>/personal-agent-source.tar.gz'
 
 这项维护命令需要 Git 检出目录；导出的源码包没有 `.git`，接收者用随包提交标识和 SHA-256 清单核验内容，随后执行 build、测试和 demo。
 
+仓库保留的 `source-manifest.json` 是 2026-10-07 原交付快照，记录 115 个源文件，原 `sourceCommit` 为 `1f13eac`，在首次发布基线 `def4a213` 中原样保留；它不能用于校验后续修复分支的工作树。Git 开发以实际提交、diff 和对应验收记录为准；生成新源码归档时，应为该归档重新生成清单，保留初始清单的历史来源。
+
 分享前核对：
 
 - 保留 LICENSE、NOTICE、package-lock.json、README 和运行/维护说明。
@@ -108,7 +115,7 @@ tar -tzf '<LOCAL_OUTPUT_DIR>/personal-agent-source.tar.gz'
 
 ## 许可证与固定来源
 
-项目当前声明 [Apache License 2.0](../LICENSE)；公开发布待用户批准，本轮没有发布或更改许可证。`packages/runtime/src/engine-process.ts` 适配自 `nuwax-ai/nuwa-cli` 的 `src/core/processes/killTree.ts`，固定来源提交、修改说明和许可见 [NOTICE](../NOTICE) 及文件头；其 Apache 来源和归属要求必须保留，不带入相邻项目 WIP。
+已发布源码保留 [Apache License 2.0](../LICENSE)，本轮云端兼容修复不更改许可证。`packages/runtime/src/engine-process.ts` 适配自 `nuwax-ai/nuwa-cli` 的 `src/core/processes/killTree.ts`，固定来源提交、修改说明和许可见 [NOTICE](../NOTICE) 及文件头；其 Apache 来源和归属要求必须保留，不带入相邻项目 WIP。
 
 ACP SDK 与 Claude ACP 为独立依赖；其传递依赖包含采用 Anthropic 商业条款的 SDK/二进制，不能把整个安装目录统一称为 Apache-2.0。完整版本、许可与分发边界见 [第三方许可说明](third-party-licenses.md)。当前源码归档不捆绑 node_modules、dist 或二进制；如分发预构建产物，另行逐项审核所含许可和归属文件。
 

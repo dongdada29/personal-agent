@@ -10,18 +10,13 @@ import { createAcpEngineAdapter } from '../src/engine-acp.js';
 import { createClaudeProbeConfig, readClaudeUserProbeMetadata } from '../src/engine-claude.js';
 import type { EngineConfig, EngineEvent, EngineHooks, EnginePermission, EngineRunContext, EngineSession } from '../src/engine.js';
 import type { OwnedProcessRecord } from '../src/process-registry.js';
+import { processRunning as processAlive } from './helpers/process-observation.js';
 
 const fixture = fileURLToPath(new URL('../src/engine-fake-fixture.ts', import.meta.url));
 const loader = createRequire(import.meta.url).resolve('tsx');
 let cwd: string;
 let context: EngineRunContext;
 let sessions: EngineSession[];
-
-function processAlive(pid: number | undefined): boolean {
-  if (pid === undefined) return false;
-  try { process.kill(pid, 0); return true; }
-  catch { return false; }
-}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

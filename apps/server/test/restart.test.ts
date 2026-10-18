@@ -1,4 +1,4 @@
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,10 +10,11 @@ import type { TaskSnapshot } from '@personal-agent/contracts';
 import { recoverOwnedProcesses, TaskStore, processOwnerWrapperPath, type OwnedProcessRecord } from '@personal-agent/runtime';
 import { acquireInstanceLock } from '../src/instance-lock.js';
 import { buildApp } from '../src/app.js';
+import { processRunning as alive } from '../../../packages/runtime/test/helpers/process-observation.js';
+import { createFixtureIpc, withFixtureCleanup } from './fixtures/fixture-ipc.js';
 
 const loader = createRequire(import.meta.url).resolve('tsx');
 const serverPath = fileURLToPath(new URL('./fixtures/restart-server.ts', import.meta.url));
-const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 async function until<T>(read: () => Promise<T>, check: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + 8000;
   for (;;) { const value = await read(); if (check(value)) return value;
@@ -25,33 +26,7 @@ function launch(dataDir: string) {
   const child = spawn(process.execPath, ['--import', loader, serverPath, dataDir], {
     env: { PATH: process.env.PATH }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
   });
-  let nextId = 0;
-  const waiting = new Map<number, { resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
-  let readyResolve!: () => void, readyReject!: (error: Error) => void;
-  const ready = new Promise<void>((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
-  const timer = setTimeout(() => readyReject(new Error('Fixture startup deadline exceeded')), 15_000);
-  child.on('message', (value: any) => {
-    if (value.ready) { clearTimeout(timer); readyResolve(); }
-    if (value.startupError) { clearTimeout(timer); readyReject(Object.assign(new Error('Fixture startup blocked'), { code: value.startupError })); }
-    if (typeof value.id === 'number') {
-      const request = waiting.get(value.id); if (!request) return;
-      waiting.delete(value.id); clearTimeout(request.timer);
-      if (value.error) request.reject(new Error(value.error)); else request.resolve(value.result);
-    }
-  });
-  const exit = new Promise<void>(resolve => child.once('exit', () => {
-    clearTimeout(timer); readyReject(new Error('Fixture service exited'));
-    for (const request of waiting.values()) { clearTimeout(request.timer); request.reject(new Error('Fixture service exited')); }
-    waiting.clear(); resolve();
-  }));
-  const request = (value: Record<string, unknown>): Promise<any> => new Promise((resolve, reject) => {
-    const id = ++nextId;
-    const timer = setTimeout(() => { waiting.delete(id); reject(new Error('Fixture IPC deadline exceeded')); }, 8000);
-    waiting.set(id, { resolve, reject, timer }); child.send({ ...value, id });
-  });
-  return { child, ready, exit, request, async close() {
-    if (child.exitCode === null && child.signalCode === null) { await request({ op: 'close' }); await exit; }
-  } };
+  return createFixtureIpc(child);
 }
 
 // The production permission check is left intact. A sandbox denial is visible
@@ -79,20 +54,25 @@ async function createReal(server: ReturnType<typeof launch>, repo: string, goal:
   expect(result.statusCode).toBe(201); return result.body.id as string;
 }
 async function cleanup(root: string, servers: ReturnType<typeof launch>[]) {
-  for (const server of servers) { try { await server.close(); } catch { /* inspect durable owner below */ } }
+  const failures: unknown[] = [];
+  for (const server of servers) { try { await server.close(); } catch (error) { failures.push(error); } }
   const filename = join(root, 'data', 'personal-agent.sqlite');
-  if (existsSync(filename)) {
-    const store = new TaskStore(filename);
-    try { await recoverOwnedProcesses(store.processes(), record => store.closeProcess(record)); }
-    finally { store.close(); }
-  }
+  try {
+    if (existsSync(filename)) {
+      const store = new TaskStore(filename);
+      await withFixtureCleanup(async () => { await recoverOwnedProcesses(store.processes(), record => store.closeProcess(record)); },
+        async () => { store.close(); });
+    }
+  } catch (error) { failures.push(error); }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, 'Restart fixture cleanup failed');
   rmSync(root, { recursive: true, force: true });
 }
 
 realRestart('reclaims a confirmed-dead service, cleans only its verified ACP group, interrupts and requires an explicit fresh attempt', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'personal-agent-real-restart-')));
   const data = join(root, 'data'); const first = launch(data); const servers = [first];
-  try {
+  await withFixtureCleanup(async () => {
     await first.ready;
     const created = await first.request({ method: 'POST', url: '/api/tasks', payload: { commandId: 'crash-task', goal: 'fake:stubborn fake:spawn-grandchild' } });
     const id = created.body.id;
@@ -116,13 +96,13 @@ realRestart('reclaims a confirmed-dead service, cleans only its verified ACP gro
     const active = await until(async () => (await second.request({ url: `/api/tasks/${id}` })).body as TaskSnapshot, value => value.task.status === 'running');
     expect(active.task.activeAttemptId).not.toBe(before.task.activeAttemptId);
     expect((await second.request({ method: 'POST', url: `/api/tasks/${id}/control`, payload: { commandId: 'cancel-resumed', action: 'cancel' } })).body.status).toBe('cancelled');
-  } finally { await cleanup(root, servers); }
+  }, () => cleanup(root, servers));
 }, 30_000);
 
 realRestart('expires a durable permission after a crash without granting or replaying its tool', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'personal-agent-permission-restart-')));
   const data = join(root, 'data'); const first = launch(data); const servers = [first];
-  try {
+  await withFixtureCleanup(async () => {
     const repo = repository(root); await first.ready;
     const id = await createReal(first, repo, 'restart-permission', ['-e', 'process.exit(0)']);
     const before = await until(async () => (await first.request({ url: `/api/tasks/${id}` })).body as TaskSnapshot,
@@ -146,13 +126,13 @@ realRestart('expires a durable permission after a crash without granting or repl
     expect(next.approvals!.find(item => item.status === 'pending')!.id).not.toBe(approval.id);
     expect(readFileSync(logPath, 'utf8').split('\n').filter(line => line.startsWith('analysis:'))).toHaveLength(2);
     await second.request({ method: 'POST', url: `/api/tasks/${id}/control`, payload: { commandId: 'take-over-new-permission', action: 'takeover', requirements: 'Keep the fixture unedited' } });
-  } finally { await cleanup(root, servers); }
+  }, () => cleanup(root, servers));
 }, 30_000);
 
 realRestart('cleans a verification group on restart and preserves its cursor until explicit resume', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'personal-agent-verification-restart-')));
   const data = join(root, 'data'); const first = launch(data); const servers = [first];
-  try {
+  await withFixtureCleanup(async () => {
     const repo = repository(root); await first.ready;
     const code = 'require("node:fs").appendFileSync("verification-starts.log","start\\n");process.on("SIGTERM",()=>{});setInterval(()=>{},1000)';
     const id = await createReal(first, repo, 'restart-verification', ['-e', code]);
@@ -173,7 +153,7 @@ realRestart('cleans a verification group on restart and preserves its cursor unt
     expect(next.task.activeAttemptId).not.toBe(before.task.activeAttemptId);
     expect(readFileSync(join(before.task.worktreePath!, 'fixture-executions.log'), 'utf8').split('\n').filter(line => line.startsWith('development:'))).toHaveLength(1);
     await second.request({ method: 'POST', url: `/api/tasks/${id}/control`, payload: { commandId: 'cancel-verification', action: 'cancel' } });
-  } finally { await cleanup(root, servers); }
+  }, () => cleanup(root, servers));
 }, 30_000);
 
 it('does not reclaim a live, malformed or guarded owner', () => {

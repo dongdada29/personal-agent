@@ -1,6 +1,8 @@
 # 2026-10-07 本地交付验收
 
-本机可运行交付已验收。执行源码基线为 `39fe3115b86f138b0f07309b98963b22370227a3`（114 个跟踪文件）；本次收尾仅更新中文文档并保留历史报告，没有改运行代码、锁定依赖或许可证。最终文档提交、文件数与逐文件 SHA-256 由交付包的 `source-manifest.json` 记录。未公开 push、发布文章或升级 M1 生产实例。
+本报告保留 2026-10-07 的本机验收事实。执行源码基线为 `39fe3115b86f138b0f07309b98963b22370227a3`（114 个跟踪文件）；当日收尾仅更新中文文档并保留历史报告，没有改运行代码、锁定依赖或许可证。最终文档提交、文件数与逐文件 SHA-256 由当日交付包的 `source-manifest.json` 记录。当日未公开 push、发布文章或升级 M1 生产实例。
+
+后续状态：2026-10-08 完整源码已发布到 `main` 的 [`def4a213`](https://github.com/dongdada29/personal-agent/commit/def4a2138c33f8ee46840e3f388e637e80ea511f)。后续开发与测试转到 Codex Linux 云端，不依赖 MacBook 或 M1 在线；Linux 结果另见 [云端验收记录](linux-cloud-acceptance.md)，不沿用本报告的 macOS 通过数。
 
 ## 今日独立源码安装与全量检查
 
@@ -64,4 +66,4 @@ npm run demo -- --check
 
 ## 尚待用户决定或另行验收
 
-项目当前声明 Apache-2.0，本轮未修改 LICENSE、NOTICE 或 package metadata；公开仓库推送与文章发布仍待用户批准。真实 HTTPS、固定公网入口、生产 paired、实体手机关闭 Wi-Fi 后的创建/审批/接管/重连/接收/撤销属于后续部署与实测范围，尚未记为本报告已通过。Linux 未做目标机验收，Windows 当前进程管理不支持。这些范围不影响已验证的本机源码安装、fake 演示和今日真实 fixture 结果。
+截至 2026-10-07 的本次验收，项目声明 Apache-2.0，未修改 LICENSE、NOTICE 或 package metadata；当时公开仓库推送与独立文章发布仍待用户批准，Linux 尚未做目标机验收。源码发布和后续 Linux 验收状态见本报告开头及 [云端记录](linux-cloud-acceptance.md)。真实 HTTPS、固定公网入口、生产 paired、实体手机关闭 Wi-Fi 后的创建/审批/接管/重连/接收/撤销属于另行部署与实测范围，尚未记为本报告已通过；Windows 进程管理不支持。这些范围不影响本报告所记录的本机源码安装、fake 演示和当日真实 fixture 结果。

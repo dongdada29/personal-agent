@@ -363,7 +363,7 @@ export async function executeDevelopmentTask(options: DevelopmentTaskOptions): P
         try {
           completed = await stage('review', iteration, async (record) => {
             const result = await agentRun(record, 'reviewer', prompt('reviewer', 'review', iteration,
-              'Review the changed code in plan mode against the goal and the actual Runtime verification records below. Do not modify files. Return ONLY a JSON object with exactly: {"verdict":"pass"|"rework","blockers":string[],"evidence":string[]}. A pass requires no blockers and all selected verification commands passing. A rework requires at least one blocker. Cite file locations or actual verification records as evidence.',
+              'Review the changed code in plan mode against the goal and the actual Runtime verification records below. Do not modify files. End your response with exactly one JSON object in a single json code fence, with exactly: {"verdict":"pass"|"rework","blockers":string[],"evidence":string[]}. Any progress commentary must come before the result and contain no other JSON objects, arrays or code fences. Do not append text after the final result. A pass requires no blockers and all selected verification commands passing. A rework requires at least one blocker. Cite file locations or actual verification records as evidence.',
               { analyses: checkpoint.analyses, verificationPassed, verificationResults: iterationResults }, requirements));
             const patch = await collectPatch();
             return { review: parseReviewResult(result.text), patch };

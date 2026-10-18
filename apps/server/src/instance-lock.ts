@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { processAlive } from '@personal-agent/runtime';
 
 const locked = () => Object.assign(new Error('Data directory owner or recovery lock needs inspection'), { code: 'INSTANCE_LOCKED' });
 function isDefinitelyGone(pid: unknown): boolean {
   if (!Number.isSafeInteger(pid) || Number(pid) < 1) return false;
+  if (process.platform === 'linux') return !processAlive(Number(pid));
+  // Preserve the existing lock boundary on platforms without /proc: only
+  // ESRCH confirms absence; invalid/ambiguous PID errors never reclaim a lock.
   try { process.kill(Number(pid), 0); return false; }
   catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
 }

@@ -190,16 +190,77 @@ export class ReviewResultError extends Error {
   }
 }
 
-/** Model prose is not a verdict. Accept only the agreed, complete JSON structure. */
-export function parseReviewResult(text: string): ReviewResult {
+/** The current review turn may contain progress prose before its one final payload. */
+function reviewJsonPayload(text: string): string {
   let json = text.trim();
+  // Do not search for a *valid* object: the first structural candidate must be
+  // the only complete result, extending to the end of this review response.
+  // Earlier objects, arrays, unsupported fences and truncated candidates can
+  // never be skipped in favor of a later passing verdict.
+  const start = json.search(/[{}\[\]]|```/u);
+  if (start > 0) {
+    const prefix = json.slice(0, start).trim();
+    // A structural token inside an open string is not a payload boundary.
+    // Reject truncated string wrappers rather than treating failed JSON as prose.
+    let quoted = false, escaped = false;
+    for (const character of prefix) {
+      if (escaped) { escaped = false; continue; }
+      if (quoted && character === '\\') { escaped = true; continue; }
+      if (character === '"') quoted = !quoted;
+    }
+    if (prefix.startsWith('"') || quoted) {
+      throw new ReviewResultError('Review contains an incomplete or wrapped result.');
+    }
+    let structuredPrefix = false;
+    for (const line of prefix.split(/\r?\n/u)) {
+      try { JSON.parse(line.trim()); structuredPrefix = true; break; } catch { /* plain progress prose */ }
+    }
+    if (structuredPrefix) throw new ReviewResultError('Review contains more than one structured result.');
+    json = json.slice(start);
+  }
   if (json.startsWith('```')) {
     const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/u.exec(json);
     if (!fenced) {
-      throw new ReviewResultError('Review must contain only JSON or a single JSON code fence.');
+      throw new ReviewResultError('Review must end with one complete JSON object or a single JSON code fence.');
     }
     json = fenced[1];
   }
+  return json;
+}
+
+/** JSON.parse overwrites duplicate keys; review fields must have one meaning. */
+function assertUniqueReviewFields(json: string): void {
+  const fields = new Set<string>();
+  let depth = 0, stringStart = -1, escaped = false;
+  // Called only after JSON.parse succeeds. Track strings and nesting so braces
+  // and field-like text inside evidence cannot change the top-level boundary.
+  for (let index = 0; index < json.length; index++) {
+    const character = json[index];
+    if (stringStart !== -1) {
+      if (escaped) { escaped = false; continue; }
+      if (character === '\\') { escaped = true; continue; }
+      if (character === '"') {
+        const start = stringStart;
+        stringStart = -1;
+        if (depth === 1) {
+          let next = index + 1;
+          while (next < json.length && /\s/u.test(json[next])) next++;
+          if (json[next] === ':') {
+            const key = JSON.parse(json.slice(start, index + 1)) as string;
+            if (fields.has(key)) throw new ReviewResultError('Review contains duplicate fields.');
+            fields.add(key);
+          }
+        }
+      }
+    } else if (character === '"') stringStart = index;
+    else if (character === '{' || character === '[') depth++;
+    else if (character === '}' || character === ']') depth--;
+  }
+}
+
+/** Prose is not a verdict; validate the one final payload without weakening its schema. */
+export function parseReviewResult(text: string): ReviewResult {
+  const json = reviewJsonPayload(text);
 
   let result: unknown;
   try {
@@ -211,6 +272,7 @@ export function parseReviewResult(text: string): ReviewResult {
   if (result === null || typeof result !== 'object' || Array.isArray(result)) {
     throw new ReviewResultError('Review must be a JSON object.');
   }
+  assertUniqueReviewFields(json);
   const record = result as Record<string, unknown>;
   const keys = Object.keys(record).sort();
   if (keys.length !== 3 || keys.join(',') !== 'blockers,evidence,verdict') {
