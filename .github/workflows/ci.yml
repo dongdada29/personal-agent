@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        node:
+          - 22.18.0
+          - 24.x
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Configure isolated Git identity
+        run: |
+          git config --global user.name "Personal Agent CI"
+          git config --global user.email "ci@example.com"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        env:
+          PERSONAL_AGENT_SSE_REAL_SOCKETS: "1"
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+        run: npm test -- --maxWorkers=1 --minWorkers=1
+
+      - name: Build
+        run: npm run build
+
+      - name: Doctor
+        run: npm run doctor
+
+      - name: Smoke
+        run: npm run smoke
+
+      - name: Demo self-check
+        run: npm run demo -- --check
+
+      - name: Share check
+        run: npm run share:check
