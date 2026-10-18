@@ -72,9 +72,40 @@ flowchart TD
 
 ### 当前状态
 
-当前发布版本为 **v0.1.0**（基线 `eeeca3c`）。全量测试命令在隔离 Git 配置下覆盖 **753 项、37 个测试文件**；CI 通过 Ubuntu 与 macOS、Node 22.18.0 与 24.x 矩阵后，才视为当前分支通过。自动测试使用临时 Git 仓库、fake/mock 引擎、验证子进程和虚拟设备，不调用真实模型，也不给真实设备开通访问。
+当前发布版本为 **v0.1.0**（`eeeca3c`），全量测试为 **753 项、37 个测试文件**。CI 在 Ubuntu 与 macOS、Node 22.18.0 与 24.x 上运行类型检查、全量测试、构建、doctor、smoke、demo 自检和分享检查。自动测试使用临时 Git 仓库、fake/mock 引擎、验证子进程和虚拟设备，不调用真实模型，也不给真实设备开通访问。
 
 浏览器工作台支持窄屏；默认入口是本机 loopback。公网访问必须启用 paired 模式并位于 HTTPS 反向代理或 Cloudflare Named Tunnel 后。作者的实例已经通过 Named Tunnel 与 paired 模式上线；实体手机关闭 Wi-Fi 后的完整创建、审批、接管、重连、接收和撤销流程仍按目标环境单独验收。Windows 进程管理暂不支持，单机部署没有冗余或自动故障切换。
+
+### 首次本地演示
+
+准备 Node.js **22.18 或更高**、npm 和 Git。当前进程管理支持 macOS/Linux POSIX；其他目标机器仍需复验，Windows 暂不支持启动。
+
+在取得的源码目录运行：
+
+```sh
+npm ci --ignore-scripts --registry=https://registry.npmjs.org --strict-ssl=true
+npm run build
+npm run smoke
+```
+
+`smoke` 在临时目录完成 fake ACP 任务，预期输出 `PASS`、`completed`、13 条事件和 1 项成果，然后清理自建数据。它不需要模型认证，也不启动常驻服务。
+
+想实际操作工作台，运行：
+
+```sh
+npm run demo
+```
+
+打开启动终端打印的地址，默认是 <http://127.0.0.1:47811/?demo=fake>。独立 demo 使用临时数据、fake 引擎和与正式实例不同的端口，预置成功和故障任务；不自动打开浏览器。填写目标后点击“创建演示任务”，查看记录和成果，点击“接收成果”。按 **Ctrl+C** 停止 demo，确认执行收尾后清理其临时数据；清理阻断时保留目录与归属记录。需要保留任务时使用 [持久实例启动](docs/getting-started.md#保留任务的本机实例)。
+
+完整操作、可复现 HTTP demo 和真实 Claude fixture 见 [首次运行与任务流程](docs/getting-started.md)。停止、备份、升级、回滚和恢复见 [运行维护](docs/operations.md)，macOS 常驻运行见其中的 [launchd 常驻](docs/operations.md#launchd-常驻)。环境变量示例见 [`.env.example`](.env.example)。
+
+截图和 GIF 由 `scripts/capture-demo-assets.mjs` 生成，Playwright 只通过 `npm exec` 临时调用，不写入依赖锁：
+
+```sh
+npm run build
+npm exec --yes --package playwright -- node scripts/capture-demo-assets.mjs
+```
 
 ### 可以做什么
 
@@ -104,9 +135,13 @@ npm run build
 npm run share:check
 ```
 
+自动测试使用临时 Git 仓库、fake ACP、验证子进程和虚拟设备，不调用真实模型。全量测试会在临时数据库生成并销毁测试配对票据和会话；它不会给真实设备开通访问。
+
 `share:check` 需要在 Git 检出目录中运行，只检查已跟踪文件。接收无 `.git` 的源码归档时按提供的 SHA-256 清单核验，无需运行此维护命令。
 
-历史验收记录按日期保留：2026-10-06 与 2026-10-07 的 605 项 macOS/M1 结果只说明当日提交和机器状态，不能替代 v0.1.0 / `eeeca3c` 的当前 CI。历史命令和边界见 [本机交付验收](docs/delivery-acceptance.md)，后续 Linux 记录见 [Linux 云端验收](docs/linux-cloud-acceptance.md)，分享材料见 [分享与证据清单](docs/sharing.md)。
+历史验收记录按日期保留：2026-10-07 从 `39fe311` 的干净源码完成 605 项、33 文件的 macOS arm64 全量回归，以及当日真实 greeting fixture（5 阶段、5 次 AgentRun、Runtime 3/3 测试、8 项成果）；10 月 6 日三环境结果另行保留。这些历史结果只说明当日提交和机器状态，不能替代 v0.1.0 / `eeeca3c` 的当前 CI。历史命令和边界见 [本机交付验收](docs/delivery-acceptance.md)，后续 Linux 记录见 [Linux 云端验收](docs/linux-cloud-acceptance.md)，分享材料见 [分享与证据清单](docs/sharing.md)。
+
+服务固定监听 `127.0.0.1:47801`，默认免登录本地模式不得直接转发到公网。设备配对、代理配置及原数据迁移见 [设备访问说明](docs/device-access.md)。
 
 ### 工程与许可
 
