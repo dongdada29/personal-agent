@@ -42,6 +42,43 @@ FIFO 一次执行一个任务，双分析最多两个引擎会话。审批等待
 
 独立 `npm run demo` 的 Ctrl+C 还会清理其自建临时数据；正式 `npm run dev` 保留数据。这两种停止流程不能混用来清理正式目录。
 
+## launchd 常驻
+
+macOS 上可以从模板创建用户级 LaunchAgent。先确认源码目录已安装依赖并完成构建，再复制模板并替换 `<NODE_BIN>`、`<REPO_DIR>`、`<HOME>` 等占位值：
+
+```sh
+mkdir -p ~/Library/LaunchAgents ~/Library/Logs/personal-agent
+cp deploy/launchd/org.personal-agent.server.plist.example \
+  ~/Library/LaunchAgents/org.personal-agent.server.plist
+# 用编辑器替换模板中的占位值；<NODE_BIN> 建议写成 `command -v node` 的绝对结果。
+plutil -lint ~/Library/LaunchAgents/org.personal-agent.server.plist
+```
+
+模板使用 `/usr/bin/env -u NODE_OPTIONS -u PERSONAL_AGENT_INSECURE_LOCALHOST <NODE_BIN> --import tsx apps/server/src/main.ts`，避免继承调试 loader 和仅限开发的 insecure localhost 开关。`WorkingDirectory` 必须指向仓库根目录，`PERSONAL_AGENT_DATA_DIR` 应位于源码目录之外。日志会写入 `~/Library/Logs/personal-agent/stdout.log` 和 `~/Library/Logs/personal-agent/stderr.log`。
+
+加载和重启：
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.personal-agent.server.plist
+launchctl kickstart -k gui/$(id -u)/org.personal-agent.server
+```
+
+查看状态和日志：
+
+```sh
+launchctl print gui/$(id -u)/org.personal-agent.server
+tail -f ~/Library/Logs/personal-agent/stdout.log
+tail -f ~/Library/Logs/personal-agent/stderr.log
+```
+
+停用：
+
+```sh
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.personal-agent.server.plist
+```
+
+升级前先 `bootout`，确认服务干净停止，再按[冷备份](#冷备份)保存数据目录和匹配源码；不要在旧实例仍运行时覆盖源码或迁移数据库。公网访问必须使用 `PERSONAL_AGENT_AUTH_MODE=paired`，并放在 HTTPS 反向代理或 Cloudflare Named Tunnel 后；Named Tunnel 入口可参考 [`docs/templates/cloudflared.yml.example`](templates/cloudflared.yml.example)，示例 origin 使用 `https://agent.example.com`。
+
 ## 冷备份
 
 数据库为 `<DATA_DIR>/personal-agent.sqlite`，可能伴随 WAL/SHM。完整备份还须包含 worktree、归属记录和任务文件；不能运行时只复制 `.sqlite` 充当一致备份。
