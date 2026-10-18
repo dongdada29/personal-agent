@@ -40,6 +40,7 @@ describe('safe service startup diagnostics', () => {
     ['PROCESS_UNSUPPORTED', 'PROCESS_UNSUPPORTED', 'macOS or Linux'],
     ['SECURITY_CONFIG_INVALID', 'SECURITY_CONFIG_INVALID', 'HTTPS origin'],
     ['SECURITY_POLICY_CONFLICT', 'SECURITY_POLICY_CONFLICT', 'HTTPS origin'],
+    ['DEMO_CONFIG_INVALID', 'DEMO_CONFIG_INVALID', 'npm run demo'],
     ['INSTANCE_LOCKED', 'INSTANCE_LOCKED', 'do not delete locks'],
     ['EADDRINUSE', 'EADDRINUSE', 'Port 47801'],
     ['EACCES', 'EACCES', 'permissions'],

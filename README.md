@@ -98,6 +98,18 @@ npm run demo
 
 打开启动终端打印的地址，默认是 <http://127.0.0.1:47811/?demo=fake>。独立 demo 使用临时数据、fake 引擎和与正式实例不同的端口，预置成功和故障任务；不自动打开浏览器。填写目标后点击“创建演示任务”，查看记录和成果，点击“接收成果”。按 **Ctrl+C** 停止 demo，确认执行收尾后清理其临时数据；清理阻断时保留目录与归属记录。需要保留任务时使用 [持久实例启动](docs/getting-started.md#保留任务的本机实例)。
 
+### 公开 fake 演示（Cloudflare Tunnel）
+
+需要把演示放到公网时，不要暴露持久实例，改用服务端强制 fake-only 的 demo 模式：不注册仓库、不运行 Claude、不执行验证命令、不构造真实 adapter；编码路径等变体无法绕过。设置演示域名后，只额外接受该精确 HTTPS origin 的 Host 与 Origin，写请求必须同源且为 JSON：
+
+```sh
+npm run build
+PERSONAL_AGENT_DEMO_PUBLIC_ORIGIN=https://<DEMO_HOSTNAME> npm run demo -- --port 47811
+# cloudflared Named Tunnel: <DEMO_HOSTNAME> -> http://127.0.0.1:47811（保留原始 Host）
+```
+
+任务数、写请求速率等限制、cloudflared ingress 示例和 launchd 模板 [`deploy/launchd/org.personal-agent.demo.plist.example`](deploy/launchd/org.personal-agent.demo.plist.example) 见 [运行维护 · 公开 fake 演示](docs/operations.md#公开-fake-演示cloudflare-named-tunnel)。
+
 完整操作、可复现 HTTP demo 和真实 Claude fixture 见 [首次运行与任务流程](docs/getting-started.md)。停止、备份、升级、回滚和恢复见 [运行维护](docs/operations.md)，macOS 常驻运行见其中的 [launchd 常驻](docs/operations.md#launchd-常驻)。环境变量示例见 [`.env.example`](.env.example)。
 
 截图和 GIF 由 `scripts/capture-demo-assets.mjs` 生成，Playwright 只通过 `npm exec` 临时调用，不写入依赖锁：

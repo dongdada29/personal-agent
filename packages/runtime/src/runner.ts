@@ -23,10 +23,23 @@ export class TaskRunner {
   private stopDisposition?: 'cancelled' | 'paused';
   private readonly pendingPermissions = new Map<string, PipelinePermissionContext>();
 
+  private readonly fakeOnly: boolean;
+  private realAdapter?: EngineAdapter;
+
+  /**
+   * fakeOnly（或 store.fakeOnly）时不保留也不构造真实 adapter；claude 任务在进入
+   * executeDevelopmentTask 之前失败，因此不会创建 worktree，也不会执行任何验证命令。
+   * 非 fake-only 时真实 adapter 在首个 claude 任务出队时才惰性构造。
+   */
   constructor(private store: TaskStore, private dataDir: string, private adapter: EngineAdapter = createFakeEngineAdapter(),
-    private realAdapter: EngineAdapter = createClaudeTaskAdapter()) {}
+    realAdapter?: EngineAdapter, options: { fakeOnly?: boolean } = {}) {
+    this.fakeOnly = options.fakeOnly === true || store.fakeOnly;
+    if (!this.fakeOnly) this.realAdapter = realAdapter;
+  }
 
   get isBlocked(): boolean { return this.blocked; }
+
+  get isFakeOnly(): boolean { return this.fakeOnly; }
 
   enqueue(id: string): void {
     if (this.stopped) return;
@@ -72,6 +85,8 @@ export class TaskRunner {
         this.abort = new AbortController();
         const attemptSignal = this.abort.signal;
         if (task.engine === 'claude') {
+          if (this.fakeOnly) throw new EngineError('REAL_ENGINE_DISABLED', 'Real engine execution is disabled for this fake-only instance.');
+          this.realAdapter ??= createClaudeTaskAdapter();
           const result = await executeDevelopmentTask({ task, attemptId: currentAttempt, store: this.store,
             adapter: this.realAdapter, dataDir: this.dataDir, signal: this.abort.signal,
             hooks: { onPermission: (request, context) => this.onPermission(request, context),

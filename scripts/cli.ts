@@ -26,6 +26,7 @@ export function failCli(error: unknown): void {
     EACCES: 'The current account cannot access the requested files. Check ownership and permissions.',
     ENOSPC: 'There is insufficient disk space. The original data is preserved.',
     EADDRINUSE: 'The demo port is occupied. Select a different loopback port with --port.',
+    DEMO_CONFIG_INVALID: 'Check PERSONAL_AGENT_DEMO_* / --public-origin: the public origin must be one exact https origin, and limits must be positive integers.',
     DEMO_FAILED: 'The isolated fake demo did not complete its checks. Run the tests and inspect the safe status output.',
     DEMO_CLEANUP_FAILED: 'Demo process cleanup is not confirmed. Preserve its temporary data, ownership records and locks for inspection.',
   };

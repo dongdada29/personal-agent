@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { buildApp } from './app.js';
 import { securityConfigFromEnv } from './access-control.js';
+import { rejectDemoEnvForPersistentServer } from './demo-mode.js';
 
 const dataDir = resolve(process.env.PERSONAL_AGENT_DATA_DIR ?? `${homedir()}/.personal-agent`);
 
@@ -14,6 +15,8 @@ function startupDiagnostic(error: unknown): string {
       return '[PROCESS_UNSUPPORTED] Persistent process recovery requires macOS or Linux.';
     case 'SECURITY_CONFIG_INVALID': case 'SECURITY_POLICY_CONFLICT':
       return `[${code}] Paired access configuration is invalid or conflicts with the retained policy. Check explicit paired mode and its exact HTTPS origin; preserve the data directory.`;
+    case 'DEMO_CONFIG_INVALID':
+      return '[DEMO_CONFIG_INVALID] PERSONAL_AGENT_DEMO_* variables only apply to `npm run demo`. Unset them for the persistent service; it never runs in demo mode.';
     case 'INSTANCE_LOCKED':
       return '[INSTANCE_LOCKED] This data directory has a service owner or recovery lock. Inspect the owning instance and use it or stop it normally; do not delete locks to bypass recovery.';
     case 'EADDRINUSE':
@@ -33,6 +36,7 @@ function startupDiagnostic(error: unknown): string {
 
 let app: Awaited<ReturnType<typeof buildApp>>['app'] | undefined;
 try {
+  rejectDemoEnvForPersistentServer(process.env);
   ({ app } = await buildApp({ dataDir, security: securityConfigFromEnv(process.env) }));
   await app.listen({ host: '127.0.0.1', port: 47801 });
   console.log('Personal Agent phase 4: loopback listener at http://127.0.0.1:47801 (paired policy is retained by its data directory)');

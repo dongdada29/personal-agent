@@ -84,6 +84,10 @@ describe('public session verification', () => {
   it('strips unneeded credentials from loopback and does not require CSRF', () => {
     expect(verifiedSession({ mode: 'loopback', csrfToken: 'must-not-retain', device }, now)).toEqual({ mode: 'loopback' });
   });
+  it('keeps only the fake demo marker of a loopback demo session', () => {
+    expect(verifiedSession({ mode: 'loopback', demo: 'fake', csrfToken: 'must-not-retain' }, now)).toEqual({ mode: 'loopback', demo: 'fake' });
+    expect(verifiedSession({ mode: 'loopback', demo: 'claude' }, now)).toEqual({ mode: 'loopback' });
+  });
   it('accepts a complete active paired device and whitelists metadata', () => {
     const result = verifiedSession({ ...paired, device: { ...device, sessionHash: 'server-only', anotherField: 'ignore' } }, now);
     expect(result).toEqual(paired);

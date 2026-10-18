@@ -40,7 +40,7 @@ FIFO 一次执行一个任务，双分析最多两个引擎会话。审批等待
 
 干净退出后 `service.lock` 应正常释放。清理失败、状态不能落库或锁仍在时保留数据目录与锁，检查安全诊断。强制停止和删除锁不属于正常停机流程。
 
-独立 `npm run demo` 的 Ctrl+C 还会清理其自建临时数据；正式 `npm run dev` 保留数据。这两种停止流程不能混用来清理正式目录。
+独立 `npm run demo` 的 Ctrl+C / SIGTERM 还会清理其自建临时数据；正式 `npm run dev` 保留数据。这两种停止流程不能混用来清理正式目录。
 
 ## launchd 常驻
 
@@ -77,7 +77,63 @@ tail -f ~/Library/Logs/personal-agent/stderr.log
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.personal-agent.server.plist
 ```
 
-升级前先 `bootout`，确认服务干净停止，再按[冷备份](#冷备份)保存数据目录和匹配源码；不要在旧实例仍运行时覆盖源码或迁移数据库。公网访问必须使用 `PERSONAL_AGENT_AUTH_MODE=paired`，并放在 HTTPS 反向代理或 Cloudflare Named Tunnel 后；Named Tunnel 入口可参考 [`docs/templates/cloudflared.yml.example`](templates/cloudflared.yml.example)，示例 origin 使用 `https://agent.example.com`。
+升级前先 `bootout`，确认服务干净停止，再按[冷备份](#冷备份)保存数据目录和匹配源码；不要在旧实例仍运行时覆盖源码或迁移数据库。公网访问必须使用 `PERSONAL_AGENT_AUTH_MODE=paired`，并放在 HTTPS 反向代理或 Cloudflare Named Tunnel 后；Named Tunnel 入口可参考 [`docs/templates/cloudflared.yml.example`](templates/cloudflared.yml.example)，示例 origin 使用 `https://agent.example.com`。只想公开一个无账号演示时，不要暴露持久实例，改用下节的公开 fake 演示。
+
+## 公开 fake 演示（Cloudflare Named Tunnel）
+
+`npm run demo` 可以作为公开的无账号演示入口：服务端以显式 demo 模式启动，fake-only 由服务端结构化强制，而不是靠 URL 字符串匹配。
+
+- **HTTP 层**：检查写在 Fastify 已路由的 handler 内，`/api/%74asks`、`/api/%77orkspaces`、`/api/%73ettings` 等编码变体落到同一 handler 并被拒绝；大小写、双斜杠、结尾斜杠、`%2f`、`..` 变体不会匹配任何写路由。拒绝码为 `403 DEMO_FAKE_ONLY`。
+- **拒绝内容**：注册 workspace（在运行 `git` 检查路径之前拒绝）；任何 `engine` 不为 `fake` 的任务；fake 任务携带 `workspaceId` 或 `verificationCommands`；把 `defaultEngine` 改为 `claude`。
+- **运行时纵深防御**：`TaskStore` 以 `fakeOnly` 打开，即使 HTTP 守卫被绕过也拒绝写入上述内容；`TaskRunner` 在 fake-only 下不持有、也不构造真实 Claude adapter，遇到 claude 任务直接以 `REAL_ENGINE_DISABLED` 失败，不创建 worktree、不执行验证命令。retry/resume 只会重跑已有的 fake 任务。
+- **访问控制**：默认仍只接受 loopback Host。设置 `PERSONAL_AGENT_DEMO_PUBLIC_ORIGIN` 后额外接受一个精确的 `https://` origin：Host 必须与之精确匹配（单个 Host 头），带 Origin 的请求必须精确同源，`Sec-Fetch-Site` 跨站被拒；该 Host 上的写请求必须带同一 Origin 且为 `application/json`，否则返回 `ORIGIN_REQUIRED` / `JSON_REQUIRED`。服务不信任 `X-Forwarded-*` / `CF-Connecting-IP`。paired 持久实例与 demo 模式互斥，其行为不变。
+- **滥用限制**：请求体上限 32 KiB；最多保存 `PERSONAL_AGENT_DEMO_MAX_TASKS`（默认 200）个任务、20 个 Agent 配置，超出返回 429；全实例每分钟最多 `PERSONAL_AGENT_DEMO_MUTATIONS_PER_MINUTE`（默认 120）个写请求。隧道后的访客都表现为 loopback 客户端，因此限速是全局的；按访客限速、WAF、Bot 防护请在 Cloudflare 侧配置。
+- **数据重置**：每次启动新建临时数据目录，SIGINT/SIGTERM 收尾后删除；重启即重置。被 `SIGKILL` 或断电中断时，临时目录 `personal-agent-demo-*` 会留在系统临时目录，需要手动核对后删除。
+- 持久服务 `npm run dev` / `apps/server/src/main.ts` 遇到任何 `PERSONAL_AGENT_DEMO_*` 变量都会以 `DEMO_CONFIG_INVALID` 拒绝启动；demo 模式只能由 `scripts/demo.ts` 开启。
+
+前台运行（`<DEMO_HOSTNAME>` 替换为你的演示域名，例如 `demo.example.com`）：
+
+```sh
+npm ci --ignore-scripts
+npm run build                      # 工作台静态文件来自 apps/web/dist
+PERSONAL_AGENT_DEMO_PUBLIC_ORIGIN=https://<DEMO_HOSTNAME> npm run demo -- --port 47811
+# 等价写法：npm run demo -- --port 47811 --public-origin https://<DEMO_HOSTNAME>
+```
+
+`cloudflared` 本地托管 Named Tunnel 的 ingress 示例。原样转发访客的 Host 即可；如需设置 `httpHostHeader`，只能设为同一个演示域名，不要改写成 `127.0.0.1`/`localhost`：
+
+```yaml
+tunnel: <APPROVED_TUNNEL_UUID>
+credentials-file: <APPROVED_EXISTING_CREDENTIALS_FILE>
+ingress:
+  - hostname: <DEMO_HOSTNAME>
+    service: http://127.0.0.1:47811
+  - service: http_status:404
+```
+
+远程托管隧道在 Cloudflare 控制台配置同样的 hostname → `http://127.0.0.1:47811` 映射。上线前在本机确认：
+
+```sh
+curl -sS -H 'Host: <DEMO_HOSTNAME>' http://127.0.0.1:47811/api/session        # {"mode":"loopback","demo":"fake"}
+curl -sS -H 'Host: <DEMO_HOSTNAME>' -H 'Origin: https://<DEMO_HOSTNAME>' -H 'Content-Type: application/json' \
+  -d '{"commandId":"probe_claude","goal":"x","engine":"claude"}' http://127.0.0.1:47811/api/%74asks   # 403 DEMO_FAKE_ONLY
+curl -sS -H 'Host: <DEMO_HOSTNAME>' -H 'Origin: https://evil.example' -H 'Content-Type: application/json' \
+  -d '{"commandId":"probe_foreign","goal":"x"}' http://127.0.0.1:47811/api/tasks      # 403 ORIGIN_REJECTED
+```
+
+macOS 常驻可使用 [`deploy/launchd/org.personal-agent.demo.plist.example`](../deploy/launchd/org.personal-agent.demo.plist.example)，与持久实例的 `org.personal-agent.server` 相互独立：
+
+```sh
+cp deploy/launchd/org.personal-agent.demo.plist.example ~/Library/LaunchAgents/org.personal-agent.demo.plist
+# 替换 <NODE_BIN>、<REPO_DIR>、<HOME>、<DEMO_HOSTNAME>、<DEMO_PORT>
+plutil -lint ~/Library/LaunchAgents/org.personal-agent.demo.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.personal-agent.demo.plist
+launchctl kickstart -k gui/$(id -u)/org.personal-agent.demo   # 重启并重置演示数据
+```
+
+需要定期重置时，可用 cron 或另一个 LaunchAgent 定时执行上面的 `kickstart -k`。`npm run demo -- --check` 会在进程内用保留域名（或已配置的 `PERSONAL_AGENT_DEMO_PUBLIC_ORIGIN`）断言上述编码路径、claude 引擎、workspace 注册、默认引擎、验证命令和公网 origin 准入行为。
+
+未包含：按访客的限速与验证码、SSE 连接数上限、fake 任务输出内容审核。公开前请在 Cloudflare 侧补充 WAF / Rate Limiting 规则。
 
 ## 冷备份
 

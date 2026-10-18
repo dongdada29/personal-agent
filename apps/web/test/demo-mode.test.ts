@@ -11,6 +11,12 @@ describe('explicit temporary fake demo', () => {
     expect(isFakeDemo(search)).toBe(false);
   });
 
+  it('treats a server-declared fake-only session as a demo even without the query marker', () => {
+    expect(isFakeDemo('', { demo: 'fake' })).toBe(true);
+    expect(isFakeDemo('?demo=claude', { demo: 'fake' })).toBe(true);
+    expect(isFakeDemo('', {})).toBe(false);
+  });
+
   it('limits demo choices and coerces a loaded Claude default or draft to fake', () => {
     expect(allowedTaskEngines(true)).toEqual(['fake']);
     expect(taskEngineForMode('claude', true)).toBe('fake');

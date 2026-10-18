@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  公开 fake-only 演示的 LaunchAgent 模板（与 org.personal-agent.server 持久实例相互独立）。
+  - 运行 scripts/demo.ts：每次启动新建临时数据目录，停止时清理；重启即重置演示数据。
+  - 服务端结构化强制 fake-only：不注册仓库、不运行 claude、不执行验证命令、不构造真实 adapter。
+  - 只监听 127.0.0.1:<DEMO_PORT>，由 Cloudflare Named Tunnel 转发；隧道需保留原始 Host。
+  - 替换 <NODE_BIN>、<REPO_DIR>、<HOME>、<DEMO_HOSTNAME>、<DEMO_PORT> 占位值；不要在此写入任何凭据。
+  - 定期重置数据：launchctl kickstart -k gui/$(id -u)/org.personal-agent.demo
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.personal-agent.demo</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <!-- 清除调试 loader 与持久实例的 paired 变量，演示进程不读取它们，也避免误导。 -->
+    <string>/usr/bin/env</string>
+    <string>-u</string>
+    <string>NODE_OPTIONS</string>
+    <string>-u</string>
+    <string>PERSONAL_AGENT_INSECURE_LOCALHOST</string>
+    <string>-u</string>
+    <string>PERSONAL_AGENT_AUTH_MODE</string>
+    <string>-u</string>
+    <string>PERSONAL_AGENT_PUBLIC_ORIGIN</string>
+    <string>-u</string>
+    <string>PERSONAL_AGENT_DATA_DIR</string>
+    <string>&lt;NODE_BIN&gt;</string>
+    <string>--import</string>
+    <string>tsx</string>
+    <string>scripts/demo.ts</string>
+    <string>--port</string>
+    <string>&lt;DEMO_PORT&gt;</string>
+  </array>
+
+  <!-- 必须是仓库根目录，并已执行 npm run build（静态工作台从 apps/web/dist 提供）。 -->
+  <key>WorkingDirectory</key>
+  <string>&lt;REPO_DIR&gt;</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PERSONAL_AGENT_DEMO_MODE</key>
+    <string>fake</string>
+    <!-- 精确的 https origin，不带路径或结尾斜杠，例如 https://demo.example.com -->
+    <key>PERSONAL_AGENT_DEMO_PUBLIC_ORIGIN</key>
+    <string>https://&lt;DEMO_HOSTNAME&gt;</string>
+    <key>PERSONAL_AGENT_DEMO_MAX_TASKS</key>
+    <string>200</string>
+    <key>PERSONAL_AGENT_DEMO_MUTATIONS_PER_MINUTE</key>
+    <string>120</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <!-- SIGTERM 后等待 fake 进程收尾并删除临时数据目录。 -->
+  <key>ExitTimeOut</key>
+  <integer>60</integer>
+
+  <key>StandardOutPath</key>
+  <string>&lt;HOME&gt;/Library/Logs/personal-agent/demo-stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>&lt;HOME&gt;/Library/Logs/personal-agent/demo-stderr.log</string>
+</dict>
+</plist>

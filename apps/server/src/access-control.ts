@@ -56,10 +56,33 @@ function publicShell(path: string): boolean {
 
 interface Identity { token: string; device: Device; csrfToken: string }
 
-export function installAccessControl(app: FastifyInstance, store: AuthStore, port: number, proposed?: AuthSecurityConfig) {
+const securityHeaders = {
+  'Cache-Control': 'no-store', 'Vary': 'Cookie, Origin', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+};
+
+function singleHost(request: FastifyRequest): string | undefined {
+  const hostCount = request.raw.rawHeaders.filter((_, index) => index % 2 === 0 && request.raw.rawHeaders[index].toLowerCase() === 'host').length;
+  const host = request.headers.host;
+  return hostCount === 1 && typeof host === 'string' ? host : undefined;
+}
+
+export interface AccessControlOptions {
+  /**
+   * 仅限 fake-only 演示：额外接受一个精确的 https 公网 origin（Host 与 Origin 都精确匹配）。
+   * 来自该 Host 的写请求必须带同一 Origin 且为 JSON，防止跨站提交；loopback 行为不变。
+   */
+  demoPublicOrigin?: string;
+  /** 在 /api/session 中声明 fake-only 演示，前端据此只展示 fake（服务端仍独立强制）。 */
+  fakeOnlyDemo?: boolean;
+}
+
+export function installAccessControl(app: FastifyInstance, store: AuthStore, port: number, proposed?: AuthSecurityConfig, options: AccessControlOptions = {}) {
   if (proposed) store.enforcePolicy(validateSecurityConfig(proposed));
   const config = store.policy();
   if (config) validateSecurityConfig(config);
+  if (config && options.demoPublicOrigin) throw Object.assign(new Error('A public demo origin cannot be combined with paired access'), { code: 'DEMO_CONFIG_INVALID' });
+  const demoOrigin = options.demoPublicOrigin ? new URL(options.demoPublicOrigin) : undefined;
   const publicOrigin = config ? new URL(config.publicOrigin) : undefined;
   const cookieName = publicOrigin?.protocol === 'https:' ? '__Host-pa-device' : 'pa-device-dev';
   const identities = new WeakMap<FastifyRequest, Identity>();
@@ -72,17 +95,32 @@ export function installAccessControl(app: FastifyInstance, store: AuthStore, por
   app.addHook('onRequest', async (request, reply) => {
     const origin = request.headers.origin;
     if (!config) {
+      const host = singleHost(request);
+      if (demoOrigin && host !== undefined && host.toLowerCase() === demoOrigin.host.toLowerCase()) {
+        // 公开演示入口：不信任 X-Forwarded-*，隧道必须保留原始 Host（不要配置 httpHostHeader）。
+        reply.headers(securityHeaders);
+        if (origin !== undefined && origin !== demoOrigin.origin) return reply.code(403).send({ code: 'ORIGIN_REJECTED', message: 'Origin is not allowed' });
+        const fetchSite = request.headers['sec-fetch-site'];
+        if (fetchSite !== undefined && !['same-origin', 'none'].includes(String(fetchSite))) {
+          return reply.code(403).send({ code: 'ORIGIN_REJECTED', message: 'Cross-site access is not allowed' });
+        }
+        if (!['GET', 'HEAD'].includes(request.method)) {
+          if (origin !== demoOrigin.origin || request.method === 'OPTIONS') return reply.code(403).send({ code: 'ORIGIN_REQUIRED', message: 'Same-origin requests are required' });
+          if (request.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
+            return reply.code(415).send({ code: 'JSON_REQUIRED', message: 'JSON requests are required' });
+          }
+        }
+        return;
+      }
       if (!['127.0.0.1', 'localhost'].includes(request.hostname)) return reply.code(403).send({ code: 'LOCAL_ONLY', message: 'Local development accepts loopback hosts only' });
       if (origin && !loopbackOrigins.has(origin)) return reply.code(403).send({ code: 'ORIGIN_REJECTED', message: 'Origin is not allowed' });
       return;
     }
-    reply.header('Cache-Control', 'no-store').header('Vary', 'Cookie, Origin').header('Referrer-Policy', 'no-referrer')
-      .header('X-Content-Type-Options', 'nosniff').header('X-Frame-Options', 'DENY').header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    reply.headers(securityHeaders);
     // This service never trusts Forwarded or X-Forwarded-* headers. A proxy must
     // preserve the configured Host; TLS and its own admission remain external.
-    const host = request.headers.host;
-    const hostCount = request.raw.rawHeaders.filter((_, index) => index % 2 === 0 && request.raw.rawHeaders[index].toLowerCase() === 'host').length;
-    if (hostCount > 1 || typeof host !== 'string' || !constantEqual(host.toLowerCase(), publicOrigin!.host.toLowerCase())) {
+    const host = singleHost(request);
+    if (host === undefined || !constantEqual(host.toLowerCase(), publicOrigin!.host.toLowerCase())) {
       return reply.code(403).send({ code: 'HOST_REJECTED', message: 'Host is not allowed' });
     }
     if (origin !== undefined && (typeof origin !== 'string' || !constantEqual(origin, config.publicOrigin))) {
@@ -139,7 +177,7 @@ export function installAccessControl(app: FastifyInstance, store: AuthStore, por
   });
 
   app.get('/api/session', async (request, reply) => {
-    if (!config) return { mode: 'loopback' };
+    if (!config) return options.fakeOnlyDemo ? { mode: 'loopback', demo: 'fake' } : { mode: 'loopback' };
     const identity = identities.get(request);
     if (!identity) return reply.code(401).send({ code: 'AUTH_REQUIRED', message: 'Pair this browser to continue' });
     return { mode: 'paired', device: identity.device, csrfToken: identity.csrfToken };
