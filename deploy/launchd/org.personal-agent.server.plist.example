@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.personal-agent.server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>-u</string>
+    <string>NODE_OPTIONS</string>
+    <string>-u</string>
+    <string>PERSONAL_AGENT_INSECURE_LOCALHOST</string>
+    <string>&lt;NODE_BIN&gt;</string>
+    <string>--import</string>
+    <string>tsx</string>
+    <string>apps/server/src/main.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>&lt;REPO_DIR&gt;</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PERSONAL_AGENT_DATA_DIR</key>
+    <string>&lt;HOME&gt;/.personal-agent</string>
+    <!-- 公网访问必须启用 paired，并放在 HTTPS 反向代理或 Cloudflare Named Tunnel 后。 -->
+    <!--
+    <key>PERSONAL_AGENT_AUTH_MODE</key>
+    <string>paired</string>
+    <key>PERSONAL_AGENT_PUBLIC_ORIGIN</key>
+    <string>https://agent.example.com</string>
+    -->
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ExitTimeOut</key>
+  <integer>120</integer>
+
+  <key>StandardOutPath</key>
+  <string>&lt;HOME&gt;/Library/Logs/personal-agent/stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>&lt;HOME&gt;/Library/Logs/personal-agent/stderr.log</string>
+</dict>
+</plist>
