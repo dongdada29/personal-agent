@@ -105,8 +105,11 @@ export async function startDemo(port = 47811, options: DemoOptions = {}) {
       const session = await inject('/api/session', 'GET', {});
       assert.equal(session.statusCode, 200);
       assert.deepEqual(session.json(), { mode: 'loopback', demo: 'fake' });
-      const accepted = await inject('/api/tasks', 'POST', { origin: demo.publicOrigin }, { commandId: 'demo_public', goal: 'Public origin fake task', engine: 'fake' });
-      assert.equal(accepted.statusCode, 201);
+      assert.equal((await inject('/api/tasks', 'GET', {})).statusCode, 200);
+      // 缺少 goal 的请求通过了 Host/Origin 准入、在 schema 校验处失败，因此不会给访客留下额外任务。
+      const admitted = await inject('/api/tasks', 'POST', { origin: demo.publicOrigin }, { commandId: 'demo_public_probe' });
+      assert.equal(admitted.statusCode, 400);
+      assert.equal(admitted.json().code, 'FST_ERR_VALIDATION');
       assert.equal((await inject('/api/tasks', 'POST', { origin: 'https://evil.example' }, { commandId: 'demo_foreign', goal: 'x' })).json().code, 'ORIGIN_REJECTED');
       assert.equal((await inject('/api/tasks', 'POST', {}, { commandId: 'demo_no_origin', goal: 'x' })).json().code, 'ORIGIN_REQUIRED');
       assert.equal((await inject('/api/%74asks', 'POST', { origin: demo.publicOrigin }, { commandId: 'demo_public_real', ...realTask })).json().code, 'DEMO_FAKE_ONLY');

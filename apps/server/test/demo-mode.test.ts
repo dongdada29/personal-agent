@@ -12,7 +12,9 @@ const fixtures: { app: Awaited<ReturnType<typeof buildApp>>['app']; dir: string 
 
 async function fixture(options: Partial<AppOptions> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'personal-agent-demo-mode-'));
-  const result = await buildApp({ dataDir: join(dir, 'data'), autoRun: false, webRoot: join(dir, 'no-web-build'), ...options });
+  let result: Awaited<ReturnType<typeof buildApp>>;
+  try { result = await buildApp({ dataDir: join(dir, 'data'), autoRun: false, webRoot: join(dir, 'no-web-build'), ...options }); }
+  catch (error) { rmSync(dir, { recursive: true, force: true }); throw error; }
   fixtures.push({ app: result.app, dir });
   return { ...result, dir };
 }
