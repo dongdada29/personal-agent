@@ -73,12 +73,24 @@ export function parseWindowsProcessTable(stdout: string): WindowsProcessRow[] | 
   return rows;
 }
 
+/** CIM/WMI 需要一套系统环境；不能只留 SystemRoot+PATH，否则 GitHub-hosted 上查询会挂死或空结果。 */
+export function windowsQueryEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const keys = ['SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'windir', 'WINDIR', 'ComSpec', 'COMSPEC',
+    'PATH', 'Path', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE', 'USERNAME', 'USERDOMAIN',
+    'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'PROCESSOR_REVISION',
+    'PSModulePath', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramData', 'PUBLIC', 'HOMEDRIVE', 'HOMEPATH'];
+  const out: NodeJS.ProcessEnv = {};
+  for (const key of keys) if (typeof env[key] === 'string' && env[key]) out[key] = env[key];
+  out.SystemRoot ??= env.SYSTEMROOT ?? 'C:\\Windows';
+  out.PATH ??= env.Path ?? '';
+  return out;
+}
+
 /** 通过 PowerShell + CIM 读取进程表；失败或超时抛错（调用方 fail closed）。 */
 export const queryWindowsProcesses: WindowsQuery = (pids) => new Promise((resolve, reject) => {
   if (pids?.some(pid => !Number.isSafeInteger(pid) || pid < 1)) { reject(new Error('invalid pid')); return; }
-  const env = { SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT, PATH: process.env.PATH ?? '' };
   execFile(windowsPowerShellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', windowsProcessQueryScript(pids)],
-    { encoding: 'utf8', timeout: pids?.length ? 15_000 : 20_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env }, (error, stdout) => {
+    { encoding: 'utf8', timeout: pids?.length ? 15_000 : 20_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env: windowsQueryEnv() }, (error, stdout) => {
       if (error) { reject(error); return; }
       const rows = parseWindowsProcessTable(stdout);
       if (!rows) reject(new Error('unparseable process table')); else resolve(rows);

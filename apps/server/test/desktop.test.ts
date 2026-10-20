@@ -104,10 +104,11 @@ describe('desktop token mode', () => {
 
 describe('desktop-main IPC entry', () => {
   const entryPath = join(import.meta.dirname, '..', 'src', 'desktop-main.ts');
-  const entry = nodeEsmSpecifier(entryPath);
+  // 入口保持文件系统路径：Windows 上 fork(file://...) 会挂起且没有任何输出。
+  // `--import` 必须是 file://，否则 ESM loader 把 `D:\tsx` 当成协议 `d:`。
   const tsx = nodeEsmSpecifier(createRequire(import.meta.url).resolve('tsx'));
   function launch() {
-    const child = fork(entry, [], { execArgv: ['--import', tsx], stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    const child = fork(entryPath, [], { execArgv: ['--import', tsx], stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: { ...process.env, PERSONAL_AGENT_DATA_DIR: '' } });
     let output = '';
     child.stdout!.on('data', chunk => { output += chunk; });

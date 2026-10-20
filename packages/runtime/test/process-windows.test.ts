@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   nodeEsmSpecifier, parseWindowsProcessTable, quoteWindowsArg, resolveWindowsCommand, terminateWindowsIdentities, windowsCommandLineToArgv,
-  windowsDescendants, windowsOwnerCommandMatches, windowsOwnerIdentityMatches, windowsProcessQueryScript, type WindowsProcessRow,
+  windowsDescendants, windowsOwnerCommandMatches, windowsOwnerIdentityMatches, windowsProcessQueryScript, windowsQueryEnv, type WindowsProcessRow,
 } from '../src/process-windows.js';
 import { engineStartupTimeoutMs } from '../src/engine.js';
 import { classifyWindowsOwner, ownedProcessSpawnOptions, ownerIdentityDeadlineMs, ownerReadyDeadlineMs, processOwnerWrapperPath, recoverOwnedProcesses, spawnOwnedProcess,
@@ -61,6 +61,16 @@ describe('Windows process table', () => {
     expect(windowsProcessQueryScript()).not.toContain('-Filter');
     expect(windowsProcessQueryScript()).toContain('-Property ProcessId,ParentProcessId,CreationDate');
     expect(windowsProcessQueryScript()).toContain('-InputObject $rows');
+  });
+
+  it('gives PowerShell a system env without inherited secrets', () => {
+    const env = windowsQueryEnv({
+      SystemRoot: 'C:\\Windows', PATH: 'C:\\Windows\\System32', USERPROFILE: 'C:\\Users\\runner',
+      ANTHROPIC_AUTH_TOKEN: 'SECRET_TEST_TOKEN', GH_TOKEN: 'SECRET_TEST_TOKEN',
+    });
+    expect(env).toMatchObject({ SystemRoot: 'C:\\Windows', PATH: 'C:\\Windows\\System32', USERPROFILE: 'C:\\Users\\runner' });
+    expect(JSON.stringify(env)).not.toContain('SECRET_TEST_TOKEN');
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
   });
 
   it('converts Windows paths to file:// ESM specifiers and leaves POSIX paths alone', () => {

@@ -304,6 +304,8 @@ export function spawnOwnedProcess(options: {
             pending = undefined;
             row = rows.find(item => item.pid === record.pid && item.created !== null &&
               windowsOwnerIdentityMatches(item, process.execPath, processOwnerWrapperPath, id));
+            // 仍持有 child 句柄时 PID 不可能被复用：只要 WMI 给出了同一 PID 的创建时间即可登记。
+            if (!row) row = rows.find(item => item.pid === record.pid && item.created !== null);
             if (row) break;
             if (Date.now() >= deadlineAt) {
               throw new EngineError('ENGINE_FAILED', 'Process owner identity could not be verified.');
