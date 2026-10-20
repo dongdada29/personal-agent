@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   nodeEsmSpecifier, parseWindowsProcessTable, quoteWindowsArg, resolveWindowsCommand, terminateWindowsIdentities, windowsCommandLineToArgv,
-  windowsDescendants, windowsOwnerCommandMatches, windowsProcessQueryScript, type WindowsProcessRow,
+  windowsDescendants, windowsOwnerCommandMatches, windowsOwnerIdentityMatches, windowsProcessQueryScript, type WindowsProcessRow,
 } from '../src/process-windows.js';
 import { engineStartupTimeoutMs } from '../src/engine.js';
 import { classifyWindowsOwner, ownedProcessSpawnOptions, ownerIdentityDeadlineMs, ownerReadyDeadlineMs, processOwnerWrapperPath, recoverOwnedProcesses, spawnOwnedProcess,
@@ -44,7 +44,8 @@ describe('Windows command lines (CommandLineToArgvW)', () => {
 describe('Windows process table', () => {
   it('parses PowerShell CIM JSON, including the single-object form', () => {
     expect(parseWindowsProcessTable(`[{"p":4,"pp":0,"c":null,"l":null},{"p":100,"pp":4,"c":"${T0}","l":"x.exe"}]`)).toEqual([
-      { pid: 4, ppid: 0, created: null, commandLine: null }, { pid: 100, ppid: 4, created: T0, commandLine: 'x.exe' }]);
+      { pid: 4, ppid: 0, created: null, commandLine: null, executablePath: null },
+      { pid: 100, ppid: 4, created: T0, commandLine: 'x.exe', executablePath: null }]);
     expect(parseWindowsProcessTable(`{"p":100,"pp":4,"c":"${T0}","l":"x.exe"}`)).toHaveLength(1);
     expect(parseWindowsProcessTable('')).toEqual([]);
     for (const bad of ['nope', '[{"p":"1","pp":0}]', '[{"p":1,"pp":0,"c":"yesterday"}]', '[1]', '"x"']) {
@@ -56,7 +57,7 @@ describe('Windows process table', () => {
     expect(windowsProcessQueryScript([12, 34])).toContain('-Filter "ProcessId=12 OR ProcessId=34"');
     // 按 PID 查身份时不能用 -Property，否则 CommandLine 为空。
     expect(windowsProcessQueryScript([12])).not.toContain('-Property');
-    expect(windowsProcessQueryScript([12])).toContain('l=$_.CommandLine');
+    expect(windowsProcessQueryScript([12])).toContain('l=$_.CommandLine; e=$_.ExecutablePath');
     expect(windowsProcessQueryScript()).not.toContain('-Filter');
     expect(windowsProcessQueryScript()).toContain('-Property ProcessId,ParentProcessId,CreationDate');
     expect(windowsProcessQueryScript()).toContain('-InputObject $rows');
@@ -87,6 +88,10 @@ describe('Windows process table', () => {
     expect(classifyWindowsOwner(record, [], EXEC)).toBe('gone');
     expect(classifyWindowsOwner(record, [{ pid: 100, ppid: 1, created: T0, commandLine: `"${EXEC}" -e x` }], EXEC)).toBe('unsafe');
     expect(classifyWindowsOwner({ ...record, created: undefined }, [], EXEC)).toBe('unsafe');
+    // CommandLine 读不到时，PID + 创建时间 + ExecutablePath 仍视为 owned；错误的可执行文件或冲突的命令行一律 unsafe。
+    expect(classifyWindowsOwner(record, [{ pid: 100, ppid: 1, created: T0, commandLine: null, executablePath: EXEC }], EXEC)).toBe('owned');
+    expect(classifyWindowsOwner(record, [{ pid: 100, ppid: 1, created: T0, commandLine: null, executablePath: 'C:\\Windows\\System32\\cmd.exe' }], EXEC)).toBe('unsafe');
+    expect(windowsOwnerIdentityMatches({ pid: 100, ppid: 1, created: T0, commandLine: `"${EXEC}" -e x`, executablePath: EXEC }, EXEC, WRAPPER, ID)).toBe(false);
   });
 
   it('terminates identities with descendants, skips reused PIDs and verifies they are gone', async () => {

@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { EngineError } from './engine.js';
 import { terminateEngineProcessTree } from './engine-process.js';
 import { processAlive, processGroupAlive } from './process-state.js';
-import { queryWindowsProcesses, taskkillTree, terminateWindowsIdentities, windowsOwnerCommandMatches,
+import { queryWindowsProcesses, taskkillTree, terminateWindowsIdentities, windowsOwnerIdentityMatches,
   type TaskkillRunner, type WindowsProcessIdentity, type WindowsProcessRow, type WindowsQuery } from './process-windows.js';
 
 export interface OwnedProcessRecord {
@@ -59,14 +59,14 @@ export const windowsProcessOps: { query: WindowsQuery; kill: TaskkillRunner } = 
 
 /**
  * Windows 归属判定（纯函数，便于测试）：
- * - 进程表里存在 PID + 创建时间都相同的行：命令行完全匹配 => owned，否则 => unsafe（不碰它）；
+ * - 进程表里存在 PID + 创建时间都相同的行：命令行完全匹配，或 CommandLine 为空但可执行文件是同一份 => owned，否则 => unsafe（不碰它）；
  * - 不存在 => gone（PID 可能已被复用给无关进程，按创建时间区分，绝不把它当作 owner）。
  */
 export function classifyWindowsOwner(record: OwnedProcessRecord, rows: WindowsProcessRow[], execPath = process.execPath): 'owned' | 'gone' | 'unsafe' {
   if (!record.created || Number.isNaN(Date.parse(record.created))) return 'unsafe';
   const row = rows.find(item => item.pid === record.pid && item.created === record.created);
   if (!row) return 'gone';
-  return windowsOwnerCommandMatches(row.commandLine, execPath, record.wrapperPath, record.id) ? 'owned' : 'unsafe';
+  return windowsOwnerIdentityMatches(row, execPath, record.wrapperPath, record.id) ? 'owned' : 'unsafe';
 }
 function bounded<T>(promise: Promise<T>, ms: number, error: EngineError): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -303,7 +303,7 @@ export function spawnOwnedProcess(options: {
             }
             pending = undefined;
             row = rows.find(item => item.pid === record.pid && item.created !== null &&
-              windowsOwnerCommandMatches(item.commandLine, process.execPath, processOwnerWrapperPath, id));
+              windowsOwnerIdentityMatches(item, process.execPath, processOwnerWrapperPath, id));
             if (row) break;
             if (Date.now() >= deadlineAt) {
               throw new EngineError('ENGINE_FAILED', 'Process owner identity could not be verified.');

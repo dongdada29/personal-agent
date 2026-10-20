@@ -20,6 +20,8 @@ export interface WindowsProcessRow {
   /** ISO 8601 UTC（PowerShell 'o' 格式，7 位小数）；系统进程可能为 null。 */
   created: string | null;
   commandLine: string | null;
+  /** Win32_Process.ExecutablePath；CommandLine 为空时用来确认仍是同一份 node/electron。 */
+  executablePath?: string | null;
 }
 
 export interface WindowsProcessIdentity { pid: number; created: string }
@@ -44,7 +46,8 @@ export function windowsProcessQueryScript(pids?: number[]): string {
     "$ProgressPreference='SilentlyContinue'",
     `$rows=@(Get-CimInstance -ClassName Win32_Process${filter}${properties} | ForEach-Object {`,
     '  [pscustomobject]@{ p=[int64]$_.ProcessId; pp=[int64]$_.ParentProcessId;',
-    "    c=$(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null }); l=$_.CommandLine } })",
+    "    c=$(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null });",
+    '    l=$_.CommandLine; e=$_.ExecutablePath } })',
     // -InputObject 保证即使只有 0/1 行也输出 JSON 数组。
     '[Console]::Out.Write((ConvertTo-Json -Compress -Depth 2 -InputObject $rows))',
   ].join('\n');
@@ -59,11 +62,13 @@ export function parseWindowsProcessTable(stdout: string): WindowsProcessRow[] | 
   const rows: WindowsProcessRow[] = [];
   for (const item of value) {
     if (!item || typeof item !== 'object') return undefined;
-    const { p, pp, c, l } = item as Record<string, unknown>;
+    const { p, pp, c, l, e } = item as Record<string, unknown>;
     if (!Number.isSafeInteger(p) || (p as number) < 0 || !Number.isSafeInteger(pp) || (pp as number) < 0) return undefined;
     if (c !== null && c !== undefined && (typeof c !== 'string' || Number.isNaN(Date.parse(c)))) return undefined;
     if (l !== null && l !== undefined && typeof l !== 'string') return undefined;
-    rows.push({ pid: p as number, ppid: pp as number, created: (c as string | null | undefined) ?? null, commandLine: (l as string | null | undefined) ?? null });
+    if (e !== null && e !== undefined && typeof e !== 'string') return undefined;
+    rows.push({ pid: p as number, ppid: pp as number, created: (c as string | null | undefined) ?? null,
+      commandLine: (l as string | null | undefined) ?? null, executablePath: (e as string | null | undefined) ?? null });
   }
   return rows;
 }
@@ -169,6 +174,17 @@ export function windowsOwnerCommandMatches(commandLine: string | null, execPath:
   const argv = windowsCommandLineToArgv(commandLine);
   return argv.length === 3 && sameWindowsPath(argv[0], execPath) && sameWindowsPath(argv[1], wrapperPath) &&
     argv[2] === `--personal-agent-owner=${id}`;
+}
+
+/**
+ * 启动时与恢复时共用的归属判定：
+ * - 能读到 CommandLine 时必须精确匹配 wrapper 与 owner id；
+ * - GitHub-hosted Windows 等环境经常读不到 CommandLine，此时退化为
+ *   PID + 100ns CreationDate + ExecutablePath（同一份 node/electron）。
+ */
+export function windowsOwnerIdentityMatches(row: WindowsProcessRow, execPath: string, wrapperPath: string, id: string): boolean {
+  if (windowsOwnerCommandMatches(row.commandLine, execPath, wrapperPath, id)) return true;
+  return !row.commandLine && typeof row.executablePath === 'string' && sameWindowsPath(row.executablePath, execPath);
 }
 
 const createdAtOrAfter = (child: string | null, parent: string) => child !== null && Date.parse(child) >= Date.parse(parent);
