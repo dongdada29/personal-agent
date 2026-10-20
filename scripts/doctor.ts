@@ -28,7 +28,7 @@ export function inspectDataDirectory(dataDir: string) {
 export function doctor(dataDir?: string) {
   const [major, minor] = process.versions.node.split('.').map(Number);
   const nodeSupported = major > 22 || major === 22 && minor >= 18;
-  const processManagementSupported = process.platform === 'darwin' || process.platform === 'linux';
+  const processManagementSupported = ['darwin', 'linux', 'win32'].includes(process.platform);
   let gitAvailable = false;
   try { execFileSync('git', ['--version'], { timeout: 5000, stdio: 'pipe' }); gitAvailable = true; } catch { /* report only */ }
   const require = createRequire(import.meta.url);
@@ -42,7 +42,7 @@ export function doctor(dataDir?: string) {
     checks: { nodeSupported, processManagementSupported, gitAvailable, webBuilt, dependencies },
     ...(dataDir ? { instance: inspectDataDirectory(dataDir) } : {}),
     engineAuthentication: 'not_checked', publicAccess: 'not_checked',
-    nextActions: [!nodeSupported && 'Use Node >=22.18.', !processManagementSupported && 'Use macOS or Linux; Windows process recovery is not supported.',
+    nextActions: [!nodeSupported && 'Use Node >=22.18.', !processManagementSupported && 'Use macOS, Linux or Windows.',
       !gitAvailable && 'Install Git.', !Object.values(dependencies).every(Boolean) && 'Run npm ci --ignore-scripts using the official registry.',
       !webBuilt && 'Run npm run build.'].filter(Boolean) };
 }

@@ -12,7 +12,7 @@ function startupDiagnostic(error: unknown): string {
     case 'CLEANUP_FAILED': case 'EVENT_FAILURE':
       return `[${code}] Startup recovery could not verify process ownership or persist closure. Scheduling is stopped; preserve the data directory and locks for inspection.`;
     case 'PROCESS_UNSUPPORTED':
-      return '[PROCESS_UNSUPPORTED] Persistent process recovery requires macOS or Linux.';
+      return '[PROCESS_UNSUPPORTED] Persistent process recovery requires macOS, Linux or Windows.';
     case 'SECURITY_CONFIG_INVALID': case 'SECURITY_POLICY_CONFLICT':
       return `[${code}] Paired access configuration is invalid or conflicts with the retained policy. Check explicit paired mode and its exact HTTPS origin; preserve the data directory.`;
     case 'DEMO_CONFIG_INVALID':

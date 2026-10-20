@@ -40,7 +40,15 @@ gate.on('data', (chunk) => {
   started = true;
   clearTimeout(startupTimer);
   buffer = '';
-  child = spawn(request.command, request.args, { detached: false, shell: false, stdio: ['inherit', 'inherit', 'inherit'] });
+  // Under Electron the owner itself runs as Node via ELECTRON_RUN_AS_NODE. Only a
+  // child that is this same executable keeps it; any other program (including
+  // other Electron apps) must not inherit the switch.
+  const env = { ...process.env };
+  if (process.versions.electron && request.command !== process.execPath) delete env.ELECTRON_RUN_AS_NODE;
+  child = spawn(request.command, request.args, { detached: false, shell: false, windowsHide: true, env, stdio: ['inherit', 'inherit', 'inherit'] });
+  // Windows has no process groups: the parent records this PID (and its creation
+  // time) so orphaned descendants can still be found after this owner exits.
+  if (child.pid !== undefined) send({ type: 'CHILD', pid: child.pid });
   child.once('error', (error) => finish({ exitCode: null, signal: null,
     spawnError: ['ENOENT', 'EACCES', 'ENOEXEC'].includes(error.code) ? error.code : 'SPAWN_ERROR' }));
   child.once('exit', (exitCode, signal) => finish({ exitCode, signal }));
