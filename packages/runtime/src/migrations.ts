@@ -101,4 +101,32 @@ export const migrations = [{
       created_at INTEGER NOT NULL
     );
   `,
+}, {
+  // v5：Ed25519 客户端设备身份 + 会话。与 v4 的 Cookie 配对设备（devices）并存：
+  // Cookie 配对仍用于 HTTPS paired 入口；这里的 client_devices 覆盖桌面客户端、
+  // 第二个客户端以及经 Tunnel / 局域网出现的浏览器。
+  version: 5,
+  sql: `
+    CREATE TABLE client_devices (
+      id TEXT PRIMARY KEY,
+      public_key TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('operator','observer')),
+      status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','revoked')),
+      trust TEXT NOT NULL CHECK(trust IN ('desktop','loopback','manual')),
+      kind TEXT NOT NULL CHECK(kind IN ('desktop','browser')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      approved_at INTEGER,
+      revoked_at INTEGER,
+      last_seen_at INTEGER
+    );
+    CREATE TABLE client_device_sessions (
+      session_hash TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL REFERENCES client_devices(id),
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX client_device_sessions_device ON client_device_sessions(device_id);
+  `,
 }];

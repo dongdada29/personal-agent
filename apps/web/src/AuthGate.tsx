@@ -5,6 +5,7 @@ import type { AuthSession } from '@personal-agent/contracts';
 import { App } from './App';
 import { ApiError, api, isTemporaryConnectionFailure } from './api';
 import { authSession, isLocalHttpDevelopment, notifyAuthRequired, observePairingNavigation, sessionExpiresIn, verifiedSession } from './auth-session';
+import { connectThisDevice, currentDeviceAuth, pollDeviceStatus } from './device-identity';
 import { MutationFlight } from './mutation-commands';
 
 export interface PairingFragment { ticket: string | null }
@@ -65,7 +66,8 @@ function PairingForm({ initialTicket, checking, connectionError, onCheck, before
 export function AuthGate({ fragment }: { fragment: PairingFragment }) {
   const [initialTicket, setInitialTicket] = useState(fragment.ticket);
   const [session, setSession] = useState<AuthSession | null>(null);
-  const [status, setStatus] = useState<'loading' | 'ready' | 'locked' | 'unavailable'>('loading');
+  const [status, setStatus] = useState<'loading' | 'ready' | 'locked' | 'unavailable' | 'pending'>('loading');
+  const [pendingDevice, setPendingDevice] = useState<{ deviceId: string; status: string } | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [checking, setChecking] = useState(true);
   const [epoch, setEpoch] = useState(0);
@@ -87,10 +89,23 @@ export function AuthGate({ fragment }: { fragment: PairingFragment }) {
     const version = ++checkVersion.current;
     setChecking(true);
     try {
+      // 先出示 Ed25519 身份。本机浏览器 / 托管桌面会自动批准；第二个客户端进入待批准。
+      // 没有 WebCrypto 时退回隐式回环操作员（npm run dev 与旧浏览器）。
+      if (!currentDeviceAuth()?.session) {
+        const device = await connectThisDevice();
+        if (!mounted.current || next.signal.aborted || version !== checkVersion.current) return;
+        if (device?.pending) {
+          setPendingDevice(device.pending);
+          setStatus('pending');
+          setConnectionError(null);
+          return;
+        }
+      }
       const result = verifiedSession(await api.getSession(next.signal));
       if (!mounted.current || next.signal.aborted || version !== checkVersion.current) return;
       authSession.set(result);
       hadSession.current = true;
+      setPendingDevice(null);
       setConnectionError(null);
       setSession(result); setStatus('ready'); setEpoch(authSession.generation);
       if (result.mode === 'loopback') setInitialTicket(null);
@@ -136,7 +151,7 @@ export function AuthGate({ fragment }: { fragment: PairingFragment }) {
     });
     void check();
     const timer = window.setInterval(() => {
-      if (['ready', 'unavailable'].includes(currentStatus.current) && !pairing.current) void check();
+      if (['ready', 'unavailable', 'pending'].includes(currentStatus.current) && !pairing.current) void check();
     }, 5000);
     const visible = () => {
       if (document.visibilityState !== 'visible') return;
@@ -169,7 +184,28 @@ export function AuthGate({ fragment }: { fragment: PairingFragment }) {
     return () => { if (timer !== undefined) clearTimeout(timer); };
   }, [status, session]);
 
+  useEffect(() => {
+    if (status !== 'pending' || !pendingDevice) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void pollDeviceStatus(pendingDevice.deviceId).then((next) => {
+        if (cancelled) return;
+        if (next === 'approved') void check();
+        else if (next === 'rejected' || next === 'revoked') setPendingDevice({ deviceId: pendingDevice.deviceId, status: next });
+      });
+    }, 3000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [status, pendingDevice]);
+
   if (status === 'loading') return <div className="auth-shell auth-loading" role="status"><Spin /><p>正在确认设备访问…</p></div>;
+  if (status === 'pending') return <div className="auth-shell">
+    <div className="auth-brand">Personal Agent</div>
+    <Card className="pair-card" bordered={false} title="等待设备批准">
+      <Alert type="info" showIcon message="这台设备还没有被批准。" description="请在已经信任的客户端（本机桌面或已批准的浏览器）打开「设备管理」，把这台设备批准为操作员或只读。批准后此页会自动继续。" />
+      {pendingDevice && <p className="field-hint">设备指纹：{pendingDevice.deviceId.slice(0, 16)}…</p>}
+      <Button block type="primary" loading={checking} disabled={checking} onClick={() => void check()}>重新检查批准状态</Button>
+    </Card>
+  </div>;
   if (status === 'unavailable') return <div className="auth-shell">
     <div className="auth-brand">Personal Agent</div>
     <Card className="pair-card" bordered={false} title="工作台连接尚未恢复">

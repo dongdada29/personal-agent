@@ -1,11 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocketServer } from 'ws';
-import { openVncBridge, vncUpstreamUrl, type PortLike } from '../src/vnc-bridge.js';
+import { mintDesktopTicket, openVncBridge, vncUpstreamUrl, type PortLike } from '../src/vnc-bridge.js';
 
 const TOKEN = 'b'.repeat(43);
+const TICKET = 't'.repeat(43);
 const servers: Server[] = [];
 afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Promise(done => { server.closeAllConnections(); server.close(done); }))); });
 
@@ -28,7 +29,14 @@ class FakePort extends EventEmitter implements PortLike {
 }
 
 async function gateServer(onConnection: (headers: Record<string, unknown>, socket: import('ws').WebSocket) => void, reject?: number) {
-  const server = createServer();
+  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    if (request.method === 'POST' && request.url?.endsWith('/tickets')) {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ticket: TICKET, expiresAt: new Date(Date.now() + 60_000).toISOString(), control: true, deploymentId: 'local', desktopId: 'd1' }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
   const wss = new WebSocketServer({ noServer: true, handleProtocols: protocols => protocols.has('binary') ? 'binary' : false });
   server.on('upgrade', (request, socket, head) => {
     if (reject) { socket.end(`HTTP/1.1 ${reject} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); return; }
@@ -51,7 +59,7 @@ describe('VNC MessagePort bridge', () => {
     expect(port.closed).toBe(true);
   });
 
-  it('authenticates upstream with the launch token and relays binary frames both ways', async () => {
+  it('mints a one-time desktop ticket, authenticates with the launch token, and relays binary frames', async () => {
     let headers: Record<string, unknown> = {};
     const received: Buffer[] = [];
     const gatePort = await gateServer((seen, ws) => {
@@ -64,7 +72,9 @@ describe('VNC MessagePort bridge', () => {
     await port.next('open');
     const banner = await port.next('data');
     expect(Buffer.from(banner.data).toString()).toBe('RFB 003.008\n');
-    expect(headers).toMatchObject({ authorization: `Bearer ${TOKEN}`, host: `127.0.0.1:${gatePort}`, 'sec-websocket-protocol': 'binary' });
+    expect(headers).toMatchObject({ authorization: `Bearer ${TOKEN}`, host: `127.0.0.1:${gatePort}` });
+    expect(String(headers['sec-websocket-protocol'])).toContain('binary');
+    expect(String(headers['sec-websocket-protocol'])).toContain(`pa-dt.${TICKET}`);
     expect(headers.origin).toBeUndefined();
     port.fromRenderer({ type: 'data', data: new Uint8Array([1, 2, 3]).buffer });
     await expect.poll(() => received.length).toBe(1);
@@ -83,6 +93,13 @@ describe('VNC MessagePort bridge', () => {
     expect(port.closed).toBe(true);
   });
 
+  it('maps a failed ticket mint to 4401', async () => {
+    const port = new FakePort();
+    openVncBridge({ port: 1 }, 'local', 'd1', port, { mintTicket: async () => { throw Object.assign(new Error('no'), { status: 401 }); } });
+    expect(await port.next('close')).toMatchObject({ code: 4401 });
+    expect(port.closed).toBe(true);
+  });
+
   it('closes upstream when the renderer closes its port', async () => {
     let upstreamClosed!: () => void;
     const closed = new Promise<void>(done => { upstreamClosed = done; });
@@ -92,5 +109,20 @@ describe('VNC MessagePort bridge', () => {
     await port.next('open');
     port.fromRenderer({ type: 'close' });
     await closed;
+  });
+
+  it('POSTs the ticket request with the launch token and never puts the ticket in a query', async () => {
+    const server = createServer((request, response) => {
+      expect(request.method).toBe('POST');
+      expect(request.url).toBe('/api/box/deployments/local/desktops/d1/tickets');
+      expect(request.headers.authorization).toBe(`Bearer ${TOKEN}`);
+      expect(request.url).not.toContain(TOKEN);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ticket: TICKET, expiresAt: new Date().toISOString(), control: true }));
+    });
+    servers.push(server);
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    const gatePort = (server.address() as AddressInfo).port;
+    await expect(mintDesktopTicket({ port: gatePort, token: TOKEN }, 'local', 'd1')).resolves.toBe(TICKET);
   });
 });

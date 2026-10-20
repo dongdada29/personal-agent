@@ -217,8 +217,11 @@ export class HostDaemon {
     if (command.type === 'desktop') {
       if (!/^d[1-3]$/.test(command.desktopId) || !['start', 'stop'].includes(command.op)) throw Object.assign(new Error('bad desktop'), { code: 'BOX_INPUT_INVALID' });
       if (command.op === 'start' && !/^[A-Za-z0-9_-]{43}$/.test(command.token ?? '')) throw Object.assign(new Error('bad token'), { code: 'BOX_INPUT_INVALID' });
+      if (command.op === 'start' && (typeof command.password !== 'string' || command.password.length < 8 || command.password.includes('\n'))) {
+        throw Object.assign(new Error('bad password'), { code: 'BOX_INPUT_INVALID' });
+      }
       const result = await this.docker(['exec', ...(command.op === 'start' ? ['-i'] : []), NAMES.container, CTL, command.op, command.desktopId],
-        { timeoutMs: 45_000, ...(command.op === 'start' ? { input: `${command.token}\n` } : {}) });
+        { timeoutMs: 45_000, ...(command.op === 'start' ? { input: `${command.token}\n${command.password}\n` } : {}) });
       if (result.code === 66) throw Object.assign(new Error('limit'), { code: 'BOX_DESKTOP_LIMIT' });
       if (result.code === 71) throw Object.assign(new Error('unsafe desktop'), { code: 'BOX_DESKTOP_UNSAFE' });
       if (result.code !== 0) throw Object.assign(new Error('desktop failed'), { code: command.op === 'start' ? 'BOX_DESKTOP_START_FAILED' : 'BOX_DESKTOP_STOP_FAILED' });

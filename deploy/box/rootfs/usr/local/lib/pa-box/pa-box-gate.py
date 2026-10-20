@@ -5,7 +5,7 @@
 而网关是唯一入口：
 
   客户端 → "PA-BOX-GATE 1 dN <43 字符令牌>\\n"
-  网关   → 校验令牌（每桌面一个、由 root 写在 /run/pa-box/gate/dN.token、最长 120 秒内有效）
+  网关   → 校验令牌（每桌面一个、由 root 写在 /run/pa-box/gate/dN.token、最长 60 秒、用一次即废）
          → 连接 /run/pa-box/dN/vnc.sock，回复 "OK\\n"，之后双向透传 RFB 字节
          → 失败回复 "ERR <CODE>\\n" 并关闭
 
@@ -25,8 +25,8 @@ LISTEN_HOST = os.environ.get('PA_BOX_GATE_HOST', '0.0.0.0')
 LISTEN_PORT = int(os.environ.get('PA_BOX_GATE_PORT', '6080'))
 TOKEN_DIR = os.path.join(RUN_DIR, 'gate')
 SOCKET_PATH = os.path.join(RUN_DIR, '{desktop}', 'vnc.sock')
-# 令牌在写入后 120 秒内可用于建立新连接；已建立的连接不受影响。server 每次打开桌面都会轮换令牌。
-TOKEN_TTL_SECONDS = 120
+# 令牌在写入后 60 秒内可用一次；握手成功后删除文件。已建立的连接不受影响。
+TOKEN_TTL_SECONDS = 60
 PREAMBLE = re.compile(rb'^PA-BOX-GATE 1 (d[1-9]) ([A-Za-z0-9_-]{43})\n$')
 PREAMBLE_TIMEOUT = 5
 MAX_CONNECTIONS = 32
@@ -107,6 +107,10 @@ async def handle(reader, writer):
         except OSError:
             await refuse(writer, 'DESKTOP_DOWN')
             return
+        try:
+            os.remove(os.path.join(TOKEN_DIR, f'{desktop}.token'))
+        except OSError:
+            pass
         writer.write(b'OK\n')
         await writer.drain()
         log(f'{desktop}: stream opened')

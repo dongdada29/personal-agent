@@ -37,6 +37,8 @@ export interface AppOptions {
    * demo 实例始终不启用真实 box。
    */
   box?: Partial<Omit<BoxServiceOptions, 'dataDir'>> | false;
+  /** 可注入时钟，供设备挑战、桌面票与 box 空闲停机的过期测试使用。 */
+  now?: () => number;
 }
 
 const BOX_ON = new Set(['1', 'true', 'on', 'yes']);
@@ -64,7 +66,7 @@ export async function buildApp(options: AppOptions) {
   let authStore!: AuthStore;
   try {
     store = new TaskStore(resolve(options.dataDir, 'personal-agent.sqlite'), { fakeOnly: demo !== undefined });
-    authStore = new AuthStore(store.filename);
+    authStore = new AuthStore(store.filename, { now: options.now });
     if (options.security) authStore.enforcePolicy(validateSecurityConfig(options.security));
     const saved = authStore.policy();
     if (saved) validateSecurityConfig(saved);
@@ -99,7 +101,7 @@ export async function buildApp(options: AppOptions) {
       ajv: { customOptions: { coerceTypes: false, removeAdditional: false } } });
     initializingApp = app;
     // demo / 未开启的实例结构上不构造 BoxService：没有任何真实适配器、命令执行、桌面代理或 agent 路由。
-    const box = resolveBoxEnabled(options) ? new BoxService({ dataDir: options.dataDir, ...(typeof options.box === 'object' ? options.box : {}) }) : undefined;
+    const box = resolveBoxEnabled(options) ? new BoxService({ dataDir: options.dataDir, now: options.now, ...(typeof options.box === 'object' ? options.box : {}) }) : undefined;
     initializingBox = box;
     app.addHook('onClose', async () => {
       try { box?.close(); } catch { /* box.sqlite 关闭失败不影响任务库的关闭 */ }
@@ -108,11 +110,12 @@ export async function buildApp(options: AppOptions) {
     });
     const port = options.port ?? 47801;
     const access = installAccessControl(app, authStore, port, undefined, { demoPublicOrigin: demo?.publicOrigin, fakeOnlyDemo: demo !== undefined,
-      ...(options.desktop ? { desktopToken: options.desktop.token } : {}) });
+      now: options.now, ...(options.desktop ? { desktopToken: options.desktop.token } : {}) });
     // 关闭时不挂载 /api/box/*（含 agent）；demo 仍挂载只读 fake 列表，但不挂 agent 端点。
     if (box || demo) {
       installBoxRoutes(app, { service: box, demo: demo !== undefined, agentRoutes: box !== undefined,
-        authorizeUpgrade: access.authorizeUpgrade, requireActive: access.requireActive });
+        authorizeUpgrade: access.authorizeUpgrade, requireActive: access.requireActive,
+        identity: access.identity, now: access.now });
     }
     if (demo) {
       // 隧道后的访客都表现为 loopback 客户端，无法可靠区分来源，所以按实例全局限速；

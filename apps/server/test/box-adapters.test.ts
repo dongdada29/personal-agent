@@ -159,11 +159,12 @@ describe('Colima adapter (macOS)', () => {
 
   it('passes the per-desktop token on stdin, never in argv', async () => {
     const { run, calls } = healthyMac();
-    await new ColimaAdapter({ run, seccompProfile: () => '/x' }).desktop('start', 'd2', token);
+    const password = 'vncpass1';
+    await new ColimaAdapter({ run, seccompProfile: () => '/x' }).desktop('start', 'd2', token, password);
     const call = calls.find(item => item.args.includes('pa-box-ctl') || item.args.includes('/usr/local/sbin/pa-box-ctl'))!;
     expect(call.args).toEqual(['--context', 'colima-pa-box', 'exec', '-i', CONTAINER, '/usr/local/sbin/pa-box-ctl', 'start', 'd2']);
-    expect(call.options?.input).toBe(`${token}\n`);
-    expect(calls.some(item => item.args.some(arg => arg.includes(token)))).toBe(false);
+    expect(call.options?.input).toBe(`${token}\n${password}\n`);
+    expect(calls.some(item => item.args.some(arg => arg.includes(token) || arg.includes(password)))).toBe(false);
   });
 
   it('stops the container and refuses streaming if the host listens on a non-loopback address', async () => {
@@ -235,9 +236,10 @@ describe('WSL2, Linux and SSH adapters', () => {
       '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '--', 'pa-cloud',
       "docker inspect pa-box --format '{{json .}}'"]]);
     const { run, calls } = fakeRunner(() => ok());
-    await new CloudSshAdapter('pa-cloud', run).desktop('start', 'd1', token);
+    const password = 'vncpass1';
+    await new CloudSshAdapter('pa-cloud', run).desktop('start', 'd1', token, password);
     expect(calls[0].args.at(-1)).toBe(`docker exec -i ${CONTAINER} /usr/local/sbin/pa-box-ctl start d1`);
-    expect(calls[0].options?.input).toBe(`${token}\n`);
+    expect(calls[0].options?.input).toBe(`${token}\n${password}\n`);
   });
 
   it('maps ssh failure to offline', async () => {
@@ -247,9 +249,9 @@ describe('WSL2, Linux and SSH adapters', () => {
 
   it('maps pa-box-ctl exit codes to fixed errors', async () => {
     const limit = fakeRunner(() => ({ code: 66 }));
-    await expect(new CloudSshAdapter('pa-cloud', limit.run).desktop('start', 'd3', token)).rejects.toMatchObject({ code: 'BOX_DESKTOP_LIMIT' });
+    await expect(new CloudSshAdapter('pa-cloud', limit.run).desktop('start', 'd3', token, 'vncpass1')).rejects.toMatchObject({ code: 'BOX_DESKTOP_LIMIT' });
     const unsafe = fakeRunner(() => ({ code: 71 }));
-    await expect(new CloudSshAdapter('pa-cloud', unsafe.run).desktop('start', 'd3', token)).rejects.toMatchObject({ code: 'BOX_DESKTOP_UNSAFE' });
+    await expect(new CloudSshAdapter('pa-cloud', unsafe.run).desktop('start', 'd3', token, 'vncpass1')).rejects.toMatchObject({ code: 'BOX_DESKTOP_UNSAFE' });
     await expect(new CloudSshAdapter('pa-cloud', limit.run).desktop('start', 'd3', 'short')).rejects.toMatchObject({ code: 'BOX_INPUT_INVALID' });
     await expect(new CloudSshAdapter('pa-cloud', limit.run).desktop('start', 'd4', token)).rejects.toMatchObject({ code: 'BOX_DESKTOP_NOT_FOUND' });
   });

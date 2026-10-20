@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import WebSocket from 'ws';
 import { buildApp } from '../src/app.js';
 import { boxRunArgs } from '../src/box/host-adapter.js';
 import { boxSafetyIssues, parseDockerInspect, type ContainerInspection } from '../src/box/parsers.js';
 import { safeInspect } from './fixtures/box.js';
+import { attachFakeVncAuth, completeBrowserRfbNone, mintDesktopTicket, onceMessage, openTicketedVnc } from './fixtures/rfb.js';
 
 const hostdPath = join(import.meta.dirname, '..', '..', '..', 'scripts', 'box', 'pa-box-hostd.mjs');
 // 守护进程是独立的无依赖脚本（部署到云主机），这里动态导入，避免把 .mjs 纳入类型检查。
@@ -69,12 +69,15 @@ describe('cloud agent end to end: ticket registration, heartbeat, long-poll desk
     const preambles: string[] = [];
     const gate: Server = createServer(socket => {
       socket.once('data', (chunk: Buffer) => {
-        const line = chunk.toString('latin1').split('\n', 1)[0];
+        const text = chunk.toString('latin1');
+        const newline = text.indexOf('\n');
+        const line = newline >= 0 ? text.slice(0, newline) : text;
         preambles.push(line);
         const [, , desktopId, token] = line.split(' ');
         if (tokens.get(desktopId) !== token) { socket.end('ERR UNAUTHORIZED\n'); return; }
-        socket.write('OK\nRFB 003.008\n');
-        socket.pipe(socket);
+        socket.write('OK\n');
+        if (newline >= 0 && newline + 1 < chunk.length) socket.unshift(chunk.subarray(newline + 1));
+        attachFakeVncAuth(socket);
       });
     });
     await new Promise<void>(resolve => gate.listen(0, '127.0.0.1', resolve));
@@ -94,7 +97,9 @@ describe('cloud agent end to end: ticket registration, heartbeat, long-poll desk
           return { code: 0, stdout: JSON.stringify({ v: 1, max: 3, desktops: ['d1', 'd2', 'd3'].map(id => ({ id, running: running.has(id) })) }), stderr: '' };
         }
         if (line.startsWith(`exec -i ${hostd.NAMES.container} /usr/local/sbin/pa-box-ctl start`)) {
-          tokens.set(args.at(-1)!, options.input!.trim());
+          const [gateToken, vncPassword] = (options.input ?? '').split('\n');
+          tokens.set(args.at(-1)!, gateToken);
+          expect(vncPassword?.length).toBeGreaterThanOrEqual(8);
           running.add(args.at(-1)!);
           return { code: 0, stdout: '', stderr: '' };
         }
@@ -112,16 +117,22 @@ describe('cloud agent end to end: ticket registration, heartbeat, long-poll desk
     expect(cloud.desktops.map((item: any) => item.streamable)).toEqual([true, true, true]);
     expect(cloud.lastHeartbeatAt).toEqual(expect.any(String));
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/box/deployments/${deploymentId}/desktops/d1/vnc`, ['binary']);
-    const first = await new Promise<Buffer>((resolve, reject) => { ws.once('message', (data: Buffer) => resolve(data)); ws.once('unexpected-response', (_q, r) => reject(new Error(`HTTP ${r.statusCode}`))); ws.once('error', reject); });
-    expect(first.toString()).toBe('RFB 003.008\n');
-    const echoed = await new Promise<Buffer>(resolve => { ws.once('message', (data: Buffer) => resolve(data)); ws.send(Buffer.from('ping')); });
+    const desktopTicket = await mintDesktopTicket(app, 'd1', { host: '127.0.0.1:47801' }, deploymentId);
+    const ws = await openTicketedVnc(port, 'd1', desktopTicket, {}, deploymentId);
+    await completeBrowserRfbNone(ws);
+    ws.send(Buffer.from('ping'));
+    const echoed = await onceMessage(ws);
     expect(echoed.toString()).toBe('ping');
-    // 令牌经长轮询下发、经 stdin 交给 pa-box-ctl；网关收到的前导与之一致，令牌从不出现在 docker 参数里。
+    // 令牌与口令经长轮询下发、经 stdin 两行交给 pa-box-ctl；口令从不出现在 docker 参数或 HTTP 响应里。
     const startCall = dockerCalls.find(call => call.args.includes('start') && call.args.includes('d1'))!;
     expect(startCall.args).toEqual(['exec', '-i', hostd.NAMES.container, '/usr/local/sbin/pa-box-ctl', 'start', 'd1']);
-    expect(preambles[0]).toBe(`PA-BOX-GATE 1 d1 ${startCall.input!.trim()}`);
-    expect(dockerCalls.some(call => call.args.some(arg => arg.includes(startCall.input!.trim())))).toBe(false);
+    const gateToken = startCall.input!.split('\n')[0];
+    const vncPassword = startCall.input!.split('\n')[1];
+    expect(preambles[0]).toBe(`PA-BOX-GATE 1 d1 ${gateToken}`);
+    expect(dockerCalls.some(call => call.args.some(arg => arg.includes(gateToken) || arg.includes(vncPassword)))).toBe(false);
+    const listedAfter = (await app.inject({ method: 'GET', url: '/api/box/deployments', headers: { host: '127.0.0.1:47801' } })).body;
+    expect(listedAfter).not.toContain(gateToken);
+    expect(listedAfter).not.toContain(vncPassword);
     ws.close();
 
     // 未注册凭据不能打开隧道。

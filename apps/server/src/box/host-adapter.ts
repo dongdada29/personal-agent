@@ -8,7 +8,7 @@
  * 桌面访问链路（L0 实测后的固定做法）：
  *   浏览器 ⇄ server（Cookie / 桌面令牌鉴权，WebSocket 由 server 终结）
  *          ⇄ 宿主 127.0.0.1:47830（或 ssh -W / 反向隧道）
- *          ⇄ 容器内 pa-box-gate:6080（每桌面、120 秒内可重复使用的令牌）
+ *          ⇄ 容器内 pa-box-gate:6080（每桌面、60 秒一次性令牌）
  *          ⇄ /run/pa-box/dN/vnc.sock（0660，只有网关用户可连）⇄ Xvnc
  * 桌面从不监听 TCP，box 内的其他 bot 无法绕过网关连到别人的桌面。
  */
@@ -52,10 +52,10 @@ export interface HostAdapter {
   actions(snapshot: BoxSnapshot): BoxAction[];
   perform(action: BoxAction): Promise<void>;
   /**
-   * 启动桌面（已运行时只轮换令牌）或停止桌面。token 只经 stdin 交给 box 内的 pa-box-ctl。
+   * 启动桌面（已运行时只轮换令牌）或停止桌面。token 与 VNC 口令只经 stdin 交给 box 内的 pa-box-ctl。
    * 并发上限、内存压力等准入检查由 BoxService 在调用前完成。
    */
-  desktop(op: DesktopOp, desktopId: string, token?: string): Promise<void>;
+  desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void>;
   /** 一条连到 box 网关（容器 6080）的原始字节流；调用方负责发送令牌前导。 */
   openGate(): Promise<Duplex>;
 }
@@ -250,12 +250,15 @@ export class DockerBox {
     await this.run(file, args, { timeoutMs: 60_000 });
   }
 
-  async desktop(op: DesktopOp, desktopId: string, token?: string): Promise<void> {
+  async desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void> {
     if (!/^d[1-9]$/.test(desktopId) || Number(desktopId.slice(1)) > BOX_QUOTA.maxDesktops) throw new BoxError('BOX_DESKTOP_NOT_FOUND', '桌面不存在。', 404);
     if (op === 'start' && (!token || !/^[A-Za-z0-9_-]{43}$/.test(token))) throw new BoxError('BOX_INPUT_INVALID', '桌面令牌无效。', 400);
-    // `exec -i`：令牌经 stdin 传入，不出现在任何进程的命令行里。
+    if (op === 'start' && (!password || password.length < 8 || password.includes('\n') || password.includes('\0'))) {
+      throw new BoxError('BOX_INPUT_INVALID', '桌面 VNC 口令无效。', 400);
+    }
+    // `exec -i`：令牌与 VNC 口令经 stdin 传入，不出现在任何进程的命令行里。
     const [file, args] = this.invoke(['exec', ...(op === 'start' ? ['-i'] : []), this.names.container, BOX_CTL, op, desktopId]);
-    const result = await this.run(file, args, { timeoutMs: op === 'start' ? 45_000 : 30_000, ...(op === 'start' ? { input: `${token}\n` } : {}) });
+    const result = await this.run(file, args, { timeoutMs: op === 'start' ? 45_000 : 30_000, ...(op === 'start' ? { input: `${token}\n${password}\n` } : {}) });
     if (result.notFound) throw new BoxError('BOX_RUNTIME_NOT_INSTALLED', '未找到容器运行时命令行工具。');
     if (result.code === 0) return;
     if (result.code === 66) throw new BoxError('BOX_DESKTOP_LIMIT', `box 内已达到桌面硬上限（${BOX_QUOTA.maxDesktops} 个），请先停止一个空闲桌面。`);

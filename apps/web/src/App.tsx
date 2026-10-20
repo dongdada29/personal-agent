@@ -178,6 +178,7 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
 
 export function App({ session }: { session: AuthSession }) {
   const fakeDemo = isFakeDemo(window.location.search, session);
+  const readOnly = session.role === 'observer' || session.clientDevice?.role === 'observer';
   const [view, setView] = useState<'workbench' | 'settings' | 'devices' | 'box'>('workbench');
   const [goal, setGoal] = useState('');
   const [requestedEngine, setEngine] = useState<'fake' | 'claude'>('fake');
@@ -474,6 +475,7 @@ export function App({ session }: { session: AuthSession }) {
           <span>Personal Agent<span className="brand-subtitle">个人任务工作台</span></span>
         </a>
         <Tag className="environment-tag" color={session.desktop ? 'cyan' : session.mode === 'paired' ? 'green' : 'blue'}>{session.desktop ? '桌面客户端' : session.mode === 'paired' ? '已配对设备' : '本机访问'}</Tag>
+        {readOnly && <Tag color="orange">只读设备</Tag>}
       </header>
 
       <main>
@@ -490,10 +492,11 @@ export function App({ session }: { session: AuthSession }) {
           <Button type={view === 'workbench' ? 'primary' : 'default'} aria-pressed={view === 'workbench'} onClick={() => setView('workbench')}>任务工作台</Button>
           <Button type={view === 'settings' ? 'primary' : 'default'} aria-pressed={view === 'settings'} onClick={() => setView('settings')}>实例配置</Button>
           <Button type={view === 'box' ? 'primary' : 'default'} aria-pressed={view === 'box'} onClick={() => setView('box')}>Linux 云电脑</Button>
-          {session.mode === 'paired' && <Button type={view === 'devices' ? 'primary' : 'default'} aria-pressed={view === 'devices'} onClick={() => setView('devices')}>设备管理</Button>}
+          {!fakeDemo && <Button type={view === 'devices' ? 'primary' : 'default'} aria-pressed={view === 'devices'} onClick={() => setView('devices')}>设备管理</Button>}
         </nav>
 
-        {view === 'box' ? <BoxPanel fakeDemo={fakeDemo} /> : view === 'devices' && session.mode === 'paired' ? <DevicePanel session={session} /> : view === 'settings' ? <SettingsPanel settings={settings} profiles={profiles} loading={settingsLoading} error={settingsError} fakeDemo={fakeDemo} onReload={loadConfiguration} onSettingsChanged={(value) => { setSettings(value); if (!engineTouched.current) setEngine(taskEngineForMode(value.defaultEngine, fakeDemo)); }} onProfileChanged={(value) => setProfiles((previous) => [...previous.filter((item) => item.id !== value.id), value])} /> : <>
+        {view === 'box' ? <BoxPanel fakeDemo={fakeDemo} readOnly={readOnly} /> : view === 'devices' && !fakeDemo ? <DevicePanel session={session} /> : view === 'settings' ? <SettingsPanel settings={settings} profiles={profiles} loading={settingsLoading} error={settingsError} fakeDemo={fakeDemo} onReload={loadConfiguration} onSettingsChanged={(value) => { setSettings(value); if (!engineTouched.current) setEngine(taskEngineForMode(value.defaultEngine, fakeDemo)); }} onProfileChanged={(value) => setProfiles((previous) => [...previous.filter((item) => item.id !== value.id), value])} /> : <>
+        {readOnly && <Alert className="phase-notice" type="warning" showIcon message="当前设备是只读权限。" description="可以查看任务、状态和桌面画面。创建任务、改配置、启停容器和控制桌面键鼠会被服务端拒绝。" />}
         <Alert
           className="phase-notice"
           type="info"
@@ -581,7 +584,7 @@ export function App({ session }: { session: AuthSession }) {
                 disabled={submitting}
               />
               {createError && <Alert className="create-error" type="error" message={createError} showIcon />}
-              <Button className="create-button" type="primary" size="large" block loading={submitting} disabled={!goal.trim()} onClick={() => void createTask()}>
+              <Button className="create-button" type="primary" size="large" block loading={submitting} disabled={readOnly || !goal.trim()} onClick={() => void createTask()}>
                 {createError ? '重试创建任务' : engine === 'claude' ? '创建真实任务' : '创建演示任务'}
               </Button>
               <p className="form-hint">目标与执行记录将保存到本机。</p>

@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { connect, createServer, type AddressInfo, type Server } from 'node:net';
+import { connect, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,37 +8,14 @@ import type { BoxAction, BoxMemoryPressure } from '@personal-agent/contracts';
 import { buildApp, type AppOptions } from '../src/app.js';
 import type { BoxSnapshot, DesktopOp, HostAdapter } from '../src/box/host-adapter.js';
 import { BoxError } from '../src/box/host-adapter.js';
-
-/** 进程内的假网关：与 pa-box-gate 同一协议；OK 之后发送 RFB 版本串并回显。 */
-async function fakeGate(tokens: Map<string, string>): Promise<{ server: Server; port: number; preambles: string[] }> {
-  const preambles: string[] = [];
-  const server = createServer(socket => {
-    let buffered = '';
-    const onData = (chunk: Buffer) => {
-      buffered += chunk.toString('latin1');
-      const newline = buffered.indexOf('\n');
-      if (newline < 0) return;
-      socket.off('data', onData);
-      const line = buffered.slice(0, newline);
-      preambles.push(line);
-      const match = /^PA-BOX-GATE 1 (d[1-3]) ([A-Za-z0-9_-]{43})$/.exec(line);
-      if (!match || tokens.get(match[1]) !== match[2]) { socket.end('ERR UNAUTHORIZED\n'); return; }
-      socket.write('OK\nRFB 003.008\n');
-      socket.pipe(socket);
-    };
-    socket.on('data', onData);
-    socket.on('error', () => socket.destroy());
-  });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  return { server, port: (server.address() as AddressInfo).port, preambles };
-}
+import { completeBrowserRfbNone, fakeVncAuthGate, mintDesktopTicket, onceMessage, openTicketedVnc } from './fixtures/rfb.js';
 
 class FakeAdapter implements HostAdapter {
   readonly id = 'colima' as const;
   readonly kind = 'local' as const;
   running = new Set<string>();
   tokens = new Map<string, string>();
-  ops: { op: DesktopOp; desktopId: string; tokenOnStdin: boolean }[] = [];
+  ops: { op: DesktopOp; desktopId: string; tokenOnStdin: boolean; passwordOnStdin: boolean }[] = [];
   memoryPressure: BoxMemoryPressure = 'normal';
   constructor(private readonly gatePort: () => number) {}
   async status(): Promise<BoxSnapshot> {
@@ -48,8 +25,8 @@ class FakeAdapter implements HostAdapter {
   }
   actions(): BoxAction[] { return ['stop_vm', 'stop_container']; }
   async perform(): Promise<void> {}
-  async desktop(op: DesktopOp, desktopId: string, token?: string): Promise<void> {
-    this.ops.push({ op, desktopId, tokenOnStdin: !!token });
+  async desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void> {
+    this.ops.push({ op, desktopId, tokenOnStdin: !!token, passwordOnStdin: !!password });
     if (op === 'start') { this.running.add(desktopId); this.tokens.set(desktopId, token!); }
     else { this.running.delete(desktopId); this.tokens.delete(desktopId); }
   }
@@ -67,11 +44,12 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) awai
 async function fixture(options: Partial<AppOptions> = {}, clock?: { now: number }) {
   const dir = mkdtempSync(join(tmpdir(), 'personal-agent-box-routes-'));
   const adapter = new FakeAdapter(() => gate.port);
-  const gate = await fakeGate(adapter.tokens);
+  const gate = await fakeVncAuthGate(adapter.tokens);
   cleanups.push(() => { rmSync(dir, { recursive: true, force: true }); });
   cleanups.push(() => new Promise<void>(resolve => gate.server.close(() => resolve())));
-  const result = await buildApp({ dataDir: join(dir, 'data'), autoRun: false, webRoot: false,
-    box: { localAdapter: adapter, sweepIntervalMs: 0, cacheMs: 0, ...(clock ? { now: () => clock.now } : {}) }, ...options });
+  const now = clock ? () => clock.now : options.now;
+  const result = await buildApp({ dataDir: join(dir, 'data'), autoRun: false, webRoot: false, now,
+    box: { localAdapter: adapter, sweepIntervalMs: 0, cacheMs: 0, ...(now ? { now } : {}) }, ...options });
   cleanups.push(() => result.app.close());
   return { ...result, adapter, gate, dir };
 }
@@ -84,10 +62,16 @@ async function listen(app: Awaited<ReturnType<typeof buildApp>>['app']): Promise
   return (app.server.address() as AddressInfo).port;
 }
 
-function openVnc(port: number, desktopId: string, headers: Record<string, string> = {}): Promise<{ ws: WebSocket; first: Buffer }> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/box/deployments/local/desktops/${desktopId}/vnc`, ['binary'], { headers });
-    ws.once('message', (data: Buffer) => resolve({ ws, first: data }));
+async function openDesktop(app: { inject: Function }, port: number, desktopId: string, headers: Record<string, string> = {}) {
+  const ticket = await mintDesktopTicket(app, desktopId, headers);
+  const ws = await openTicketedVnc(port, desktopId, ticket, headers);
+  await completeBrowserRfbNone(ws);
+  return { ws, ticket };
+}
+
+function rejectUpgrade(port: number, desktopId: string, headers: Record<string, string> = {}, protocols: string[] = ['binary']): Promise<never> {
+  return new Promise((_, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/box/deployments/local/desktops/${desktopId}/vnc`, protocols, { headers });
     ws.once('unexpected-response', (_request, response) => reject(Object.assign(new Error(`HTTP ${response.statusCode}`), { status: response.statusCode })));
     ws.once('error', reject);
   });
@@ -125,19 +109,21 @@ describe('box deployments API', () => {
   it('streams a desktop over an authenticated WebSocket through the gate with a fresh per-open token', async () => {
     const { app, adapter, gate } = await fixture();
     const port = await listen(app);
-    const first = await openVnc(port, 'd1', { origin: 'http://127.0.0.1:47801' });
-    expect(first.first.toString()).toBe('RFB 003.008\n');
+    const first = await openDesktop(app, port, 'd1', { origin: 'http://127.0.0.1:47801' });
     expect(first.ws.protocol).toBe('binary');
-    const echoed = await new Promise<Buffer>(resolve => { first.ws.once('message', (data: Buffer) => resolve(data)); first.ws.send(Buffer.from([1, 2, 3])); });
-    expect([...echoed]).toEqual([1, 2, 3]);
+    const marker = Buffer.from([9, 8, 7, 6]);
+    first.ws.send(marker);
+    const echoed = await onceMessage(first.ws);
+    expect([...echoed]).toEqual([9, 8, 7, 6]);
 
     const listed = await app.inject({ method: 'GET', url: '/api/box/deployments', headers: { host: '127.0.0.1:47801' } });
     expect(listed.json().deployments[0].desktops[0]).toMatchObject({ id: 'd1', state: 'running', viewers: 1 });
 
-    // 第二次打开会轮换令牌；网关看到两个不同的令牌，令牌从不出现在 HTTP 响应中。
-    const second = await openVnc(port, 'd1', { origin: 'http://127.0.0.1:47801' });
+    // 第二次打开会轮换网关令牌；令牌与 VNC 口令从不出现在 HTTP 响应中。
+    const second = await openDesktop(app, port, 'd1', { origin: 'http://127.0.0.1:47801' });
     expect(new Set(gate.preambles.map(line => line.split(' ')[3])).size).toBe(2);
     expect(listed.body).not.toContain(adapter.tokens.get('d1')!);
+    expect(adapter.ops.filter(op => op.op === 'start').every(op => op.passwordOnStdin)).toBe(true);
     first.ws.close();
     second.ws.close();
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -146,11 +132,17 @@ describe('box deployments API', () => {
     expect(after.json().deployments[0].desktops[0].idleStopAt).toEqual(expect.any(String));
   });
 
+  it('rejects a WebSocket without a desktop ticket after the connection token is accepted', async () => {
+    const { app } = await fixture();
+    const port = await listen(app);
+    await expect(rejectUpgrade(port, 'd1', { origin: 'http://127.0.0.1:47801' })).rejects.toMatchObject({ status: 401 });
+  });
+
   it('rejects cross-origin WebSocket upgrades and non-WebSocket upgrades', async () => {
     const { app, adapter } = await fixture();
     const port = await listen(app);
-    await expect(openVnc(port, 'd1', { origin: 'https://evil.example' })).rejects.toMatchObject({ status: 403 });
-    await expect(openVnc(port, 'd9')).rejects.toMatchObject({ status: 404 });
+    await expect(rejectUpgrade(port, 'd1', { origin: 'https://evil.example' })).rejects.toMatchObject({ status: 403 });
+    await expect(rejectUpgrade(port, 'd9')).rejects.toMatchObject({ status: 404 });
     expect(adapter.ops).toEqual([]);
   });
 
@@ -159,14 +151,15 @@ describe('box deployments API', () => {
     adapter.running.add('d1');
     adapter.running.add('d2');
     const port = await listen(app);
-    await expect(openVnc(port, 'd3')).rejects.toMatchObject({ status: 409 });
+    const ticket = await mintDesktopTicket(app, 'd3');
+    await expect(openTicketedVnc(port, 'd3', ticket)).rejects.toMatchObject({ status: 409 });
   });
 
   it('stops desktops nobody has viewed for idleStopMinutes', async () => {
     const clock = { now: Date.parse('2026-10-20T00:00:00Z') };
     const { app, adapter, box } = await fixture({}, clock);
     const port = await listen(app);
-    const viewer = await openVnc(port, 'd1');
+    const viewer = await openDesktop(app, port, 'd1');
     clock.now += 60 * 60_000;
     // 有人在看：不停。
     expect(await box!.sweepIdleDesktops()).toEqual([]);
@@ -198,9 +191,9 @@ describe('desktop-token mode (Electron managed server)', () => {
     expect(session.body).not.toContain(token);
 
     const port = await listen(app);
-    await expect(openVnc(port, 'd1')).rejects.toMatchObject({ status: 401 });
-    const viewer = await openVnc(port, 'd1', { authorization: `Bearer ${token}` });
-    expect(viewer.first.toString()).toBe('RFB 003.008\n');
+    await expect(rejectUpgrade(port, 'd1')).rejects.toMatchObject({ status: 401 });
+    const viewer = await openDesktop(app, port, 'd1', { authorization: `Bearer ${token}` });
+    expect(viewer.ws.protocol).toBe('binary');
     viewer.ws.close();
   });
 
@@ -227,7 +220,7 @@ describe('demo instance box surface stays fake-only', () => {
       expect(response.json().code).toBe('DEMO_FAKE_ONLY');
     }
     const port = await listen(app);
-    await expect(openVnc(port, 'd1', { host: 'demo.example.test', origin: 'https://demo.example.test' })).rejects.toMatchObject({ status: 403 });
+    await expect(rejectUpgrade(port, 'd1', { host: 'demo.example.test', origin: 'https://demo.example.test' })).rejects.toMatchObject({ status: 403 });
     expect(adapter.ops).toEqual([]);
   });
 });

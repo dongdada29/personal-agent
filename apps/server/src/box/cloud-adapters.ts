@@ -28,12 +28,12 @@ export const AGENT_OFFLINE_AFTER_MS = 45_000;
 
 export type AgentCommand =
   | { id: string; type: 'action'; action: 'start_container' | 'stop_container' }
-  | { id: string; type: 'desktop'; op: DesktopOp; desktopId: string; token?: string }
+  | { id: string; type: 'desktop'; op: DesktopOp; desktopId: string; token?: string; password?: string }
   | { id: string; type: 'tunnel'; streamId: string };
 
 type AgentRequest =
   | { type: 'action'; action: 'start_container' | 'stop_container' }
-  | { type: 'desktop'; op: DesktopOp; desktopId: string; token?: string };
+  | { type: 'desktop'; op: DesktopOp; desktopId: string; token?: string; password?: string };
 
 export interface AgentResult { id: string; ok: boolean; errorCode?: string }
 
@@ -183,9 +183,9 @@ export class CloudAgentAdapter implements HostAdapter {
     await this.broker.request(this.deploymentId, { type: 'action', action });
   }
 
-  async desktop(op: DesktopOp, desktopId: string, token?: string): Promise<void> {
+  async desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void> {
     if (!this.online()) throw new BoxError('BOX_AGENT_OFFLINE', '云端主机当前离线。');
-    await this.broker.request(this.deploymentId, { type: 'desktop', op, desktopId, ...(token ? { token } : {}) });
+    await this.broker.request(this.deploymentId, { type: 'desktop', op, desktopId, ...(token ? { token } : {}), ...(password ? { password } : {}) });
   }
 
   openGate(): Promise<Duplex> {
@@ -243,8 +243,8 @@ export class CloudSshAdapter implements HostAdapter {
     throw new BoxError('BOX_ACTION_UNSUPPORTED', '云端主机由服务商管理 VM，这里只能启停 box 容器。', 400);
   }
 
-  desktop(op: DesktopOp, desktopId: string, token?: string): Promise<void> {
-    return this.docker.desktop(op, desktopId, token);
+  desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void> {
+    return this.docker.desktop(op, desktopId, token, password);
   }
 
   async openGate(): Promise<Duplex> {

@@ -40,7 +40,7 @@ describe('persistent task store', () => {
     expect(before.artifacts[0].content).toBe('# Complete');
     expect(before.events.map(e => e.seq)).toEqual([...before.events.map(e => e.seq)].sort((a, b) => a - b));
     const db = new DatabaseSync(filename);
-    expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()?.count).toBe(4);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()?.count).toBe(5);
     expect(db.prepare('PRAGMA journal_mode').get()?.journal_mode).toBe('wal');
     expect(db.prepare('SELECT status FROM attempts').get()?.status).toBe('completed');
     db.close();

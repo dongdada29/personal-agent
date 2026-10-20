@@ -3,8 +3,11 @@ import type {
   AgentProfile,
   AgentRole,
   AuthSession,
+  ClientDevice,
   CreateTaskCommand,
   Device,
+  DesktopStreamTicket,
+  DeviceRole,
   InstanceSettings,
   PairingTicket,
   BoxAction,
@@ -22,6 +25,7 @@ import type {
 import { DELIVERY_STATUSES, TASK_STATUSES } from '@personal-agent/contracts';
 import { authSession, notifyAuthRequired } from './auth-session';
 import { boxErrorMessages } from './box-display';
+import { deviceAuthHeaders } from './device-identity';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); this.name = 'ApiError'; }
@@ -45,6 +49,10 @@ const errorMessages: Record<string, string> = {
   DEMO_TASK_LIMIT: '演示实例的任务数已达上限，请稍后再来（演示重启后数据会重置）。',
   DEMO_PROFILE_LIMIT: '演示实例的 Agent 配置数已达上限。',
   DEMO_RATE_LIMIT: '公开演示当前请求较多，请约一分钟后重试。',
+  PAIRING_REQUIRED: '这台设备还在等待批准，请在已信任的客户端里批准后重试。',
+  PAIRING_REJECTED: '这台设备的访问申请已被拒绝。',
+  PERMISSION_DENIED: '当前设备是只读权限，不能执行该操作。',
+  DESKTOP_TICKET_REQUIRED: '打开桌面需要一张有效的一次性桌面票，请重新打开。',
   RUNNER_BLOCKED: '执行器暂停调度，需要在服务主机检查进程清理或持久化记录。任务记录已保留。',
   SERVER_CLOSING: '服务正在停止，请等待重新启动后重试。',
   REAL_TASK_INPUT: 'Claude 任务需要选择 Git 工作区，并填写验证程序和参数。',
@@ -60,6 +68,7 @@ export async function request<T>(url: string, init?: RequestInit): Promise<T> {
   if (!url.startsWith('/api/')) throw new ApiError('请求地址必须属于当前工作台。', 400, 'INVALID_API_URL');
   const generation = authSession.generation;
   const headers = new Headers(init?.headers);
+  for (const [name, value] of Object.entries(deviceAuthHeaders())) headers.set(name, value);
   if (url === '/api/pair') headers.delete('X-CSRF-Token');
   const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes((init?.method ?? 'GET').toUpperCase());
   if (unsafe && url !== '/api/pair') {
@@ -127,7 +136,23 @@ export const api = {
   pairDevice: (ticket: string, name: string) => request<AuthSession>('/api/pair', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket, name }),
   }),
-  listDevices: (signal?: AbortSignal) => request<{ devices: Device[] }>('/api/devices', { signal }),
+  listDevices: (signal?: AbortSignal) => request<{ devices: Device[]; clientDevices?: ClientDevice[] }>('/api/devices', { signal }),
+  approveClientDevice: (id: string, command: { commandId: string; role: DeviceRole }) =>
+    request<ClientDevice>(`/api/client-devices/${encodeURIComponent(id)}/approve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+    }),
+  rejectClientDevice: (id: string, command: { commandId: string }) =>
+    request<ClientDevice>(`/api/client-devices/${encodeURIComponent(id)}/reject`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+    }),
+  revokeClientDevice: (id: string, command: { commandId: string }) =>
+    request<ClientDevice>(`/api/client-devices/${encodeURIComponent(id)}`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+    }),
+  mintDesktopTicket: (deploymentId: string, desktopId: string) =>
+    request<DesktopStreamTicket>(`/api/box/deployments/${encodeURIComponent(deploymentId)}/desktops/${encodeURIComponent(desktopId)}/tickets`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    }),
   createPairTicket: (command: { commandId: string }) => request<PairingTicket>('/api/pair-tickets', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
   }),

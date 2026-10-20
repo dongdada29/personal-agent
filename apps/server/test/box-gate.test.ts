@@ -69,11 +69,19 @@ describe.skipIf(!python)('pa-box-gate (real Python gate, temp run dir, loopback 
     await expect(gateHandshake(await connectGate(), 'd2', token)).rejects.toMatchObject({ code: 'BOX_DESKTOP_TOKEN_REJECTED' });
   });
 
-  it('rejects tokens older than 120 seconds', async () => {
+  it('rejects tokens older than 60 seconds', async () => {
     const token = newDesktopToken();
     writeToken('d1', token);
-    const old = (Date.now() - 200_000) / 1000;
+    const old = (Date.now() - 61_000) / 1000;
     utimesSync(join(dir, 'gate', 'd1.token'), old, old);
+    await expect(gateHandshake(await connectGate(), 'd1', token)).rejects.toMatchObject({ code: 'BOX_DESKTOP_TOKEN_REJECTED' });
+  });
+
+  it('accepts a fresh token only once', async () => {
+    const token = newDesktopToken();
+    writeToken('d1', token);
+    const first = await gateHandshake(await connectGate(), 'd1', token);
+    first.destroy();
     await expect(gateHandshake(await connectGate(), 'd1', token)).rejects.toMatchObject({ code: 'BOX_DESKTOP_TOKEN_REJECTED' });
   });
 
@@ -110,10 +118,15 @@ describe.skipIf(!python || !bash)('box image scripts', () => {
     expect(desktop).toMatch(/-rfbport -1/);
     expect(desktop).toMatch(/-rfbunixpath "\$socket"/);
     expect(desktop).toMatch(/-rfbunixmode 0660/);
+    expect(desktop).toMatch(/-SecurityTypes VncAuth/);
+    expect(desktop).toMatch(/-rfbauth/);
+    expect(desktop).not.toMatch(/SecurityTypes None/);
     expect(desktop).toMatch(/MIT-MAGIC-COOKIE-1/);
     const control = readFileSync(ctl, 'utf8');
-    // 令牌只从 stdin 读取。
+    // 令牌与 VNC 口令只从 stdin 两行读取。
     expect(control).toMatch(/IFS= read -r -t 5 token/);
+    expect(control).toMatch(/IFS= read -r -t 5 password/);
+    expect(control).toMatch(/vncpasswd -f/);
   });
 
   it('no-tcp-listen.py flags a process that listens on TCP', async () => {

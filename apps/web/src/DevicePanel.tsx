@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Empty, Input, Modal, Spin, Tag } from 'antd';
-import type { AuthSession, Device, PairingTicket } from '@personal-agent/contracts';
+import type { AuthSession, ClientDevice, Device, DeviceRole, PairingTicket } from '@personal-agent/contracts';
 import { api } from './api';
 import { notifyAuthRequired, pairingTicketLink } from './auth-session';
 import { MutationFlight } from './mutation-commands';
@@ -21,6 +21,8 @@ function message(cause: unknown): string {
 export function DevicePanel({ session }: { session: AuthSession }) {
   const currentDevice = session.device;
   const [devices, setDevices] = useState<Device[]>([]);
+  const [clientDevices, setClientDevices] = useState<ClientDevice[]>([]);
+  const readOnly = session.role === 'observer' || session.clientDevice?.role === 'observer';
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -50,6 +52,7 @@ export function DevicePanel({ session }: { session: AuthSession }) {
       const result = await api.listDevices(controller.signal);
       if (!alive.current || generation.current !== requestGeneration || controller.signal.aborted) return;
       setDevices(result.devices.filter((device) => device.revokedAt === null));
+      setClientDevices((result.clientDevices ?? []).filter((device) => device.status !== 'revoked'));
       setError(null);
     } catch (cause) {
       if (alive.current && generation.current === requestGeneration && !controller.signal.aborted) setError(message(cause));
@@ -74,8 +77,8 @@ export function DevicePanel({ session }: { session: AuthSession }) {
     revokeCommands.current.clear();
     mutations.current = new MutationFlight();
     copyFlight.current = new MutationFlight();
-    if (session.mode === 'paired') void loadDevices();
-    else setLoading(false);
+    if (session.demo === 'fake') setLoading(false);
+    else void loadDevices();
     return () => {
       alive.current = false;
       generation.current += 1;
@@ -192,7 +195,30 @@ export function DevicePanel({ session }: { session: AuthSession }) {
     });
   }
 
-  if (session.mode !== 'paired') return null;
+  async function decide(device: ClientDevice, action: 'approve' | 'reject' | 'revoke', role?: DeviceRole) {
+    if (!alive.current || mutations.current.isRunning || readOnly) return;
+    const requestGeneration = generation.current;
+    const commandId = crypto.randomUUID();
+    setRevokingId(device.id);
+    setError(null);
+    await mutations.current.run(async () => {
+      try {
+        if (action === 'approve') await api.approveClientDevice(device.id, { commandId, role: role ?? 'observer' });
+        else if (action === 'reject') await api.rejectClientDevice(device.id, { commandId });
+        else await api.revokeClientDevice(device.id, { commandId });
+        if (alive.current && generation.current === requestGeneration) await loadDevices();
+      } catch (cause) {
+        if (alive.current && generation.current === requestGeneration) setError(message(cause));
+      } finally {
+        if (alive.current && generation.current === requestGeneration) setRevokingId(null);
+      }
+    });
+  }
+
+  if (session.demo === 'fake') return null;
+
+  const pending = clientDevices.filter((device) => device.status === 'pending');
+  const approved = clientDevices.filter((device) => device.status === 'approved');
 
   return (
     <section className="device-panel" aria-label="设备与配对">
@@ -224,7 +250,27 @@ export function DevicePanel({ session }: { session: AuthSession }) {
         </Card>
       </div>
 
-      <Card bordered={false} title={`已配对设备 · ${devices.length}`}>
+      {pending.length > 0 && <Card bordered={false} title={`待批准设备 · ${pending.length}`}>
+        <ul className="device-list">{pending.map((device) => <li className="device-card" key={device.id}>
+          <div className="device-heading"><strong>{device.name}</strong><Tag color="orange">待批准</Tag><Tag>{device.kind === 'desktop' ? '桌面客户端' : '浏览器'}</Tag></div>
+          <dl className="device-meta evidence-meta"><div><dt>设备指纹</dt><dd>{device.id.slice(0, 16)}…</dd></div><div><dt>申请时间</dt><dd>{time(device.createdAt)}</dd></div></dl>
+          {!readOnly && <div className="device-actions">
+            <Button type="primary" disabled={busy} onClick={() => void decide(device, 'approve', 'operator')}>批准为操作员</Button>
+            <Button disabled={busy} onClick={() => void decide(device, 'approve', 'observer')}>批准为只读</Button>
+            <Button danger disabled={busy} onClick={() => void decide(device, 'reject')}>拒绝</Button>
+          </div>}
+        </li>)}</ul>
+      </Card>}
+
+      {approved.length > 0 && <Card bordered={false} title={`已批准客户端 · ${approved.length}`}>
+        <ul className="device-list">{approved.map((device) => <li className="device-card" key={device.id}>
+          <div className="device-heading"><strong>{device.name}</strong><Tag color={device.role === 'operator' ? 'green' : 'blue'}>{device.role === 'operator' ? '操作' : '只读'}</Tag><Tag>{device.trust === 'desktop' ? '托管桌面' : device.trust === 'loopback' ? '本机自动批准' : '手动批准'}</Tag></div>
+          <dl className="device-meta evidence-meta"><div><dt>设备指纹</dt><dd>{device.id.slice(0, 16)}…</dd></div><div><dt>批准时间</dt><dd>{device.approvedAt ? time(device.approvedAt) : '—'}</dd></div></dl>
+          {!readOnly && <div className="device-actions"><Button danger disabled={busy} onClick={() => void decide(device, 'revoke')}>撤销</Button></div>}
+        </li>)}</ul>
+      </Card>}
+
+      {session.mode === 'paired' && <Card bordered={false} title={`已配对设备 · ${devices.length}`}>
         {loading && devices.length === 0 ? <div className="loading-area"><Spin /></div> : devices.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无设备记录" /> : (
           <ul className="device-list">{devices.map((device) => <li className="device-card" key={device.id}>
             <div className="device-heading"><strong>{device.name}</strong>{device.id === currentDevice?.id && <Tag color="green">当前设备</Tag>}{Date.parse(device.expiresAt) <= Date.now() && <Tag>已到期</Tag>}</div>
@@ -232,7 +278,7 @@ export function DevicePanel({ session }: { session: AuthSession }) {
             <div className="device-actions"><Button danger disabled={busy} onClick={() => { setError(null); setConfirmDevice(device); }}>撤销访问</Button></div>
           </li>)}</ul>
         )}
-      </Card>
+      </Card>}
 
       <Modal open={confirmDevice !== null} title={confirmDevice ? `撤销“${confirmDevice.name}”的访问？` : '撤销设备访问'} okText={confirmDevice?.id === currentDevice?.id ? '撤销并锁定工作台' : '确认撤销'} cancelText="保留访问" okButtonProps={{ danger: true, disabled: generating }} confirmLoading={revokingId !== null} closable={revokingId === null} maskClosable={revokingId === null} onCancel={() => { if (!busy) setConfirmDevice(null); }} onOk={() => { if (confirmDevice) void revoke(confirmDevice); }}>
         <p className="device-warning">撤销后，该设备立即失去工作台访问权限。正在执行的任务继续运行。</p>

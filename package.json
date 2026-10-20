@@ -16,6 +16,7 @@
     "fixture": "node --import tsx scripts/create-fixture.ts",
     "pair": "node --import tsx scripts/pair.ts",
     "smoke": "node --import tsx scripts/smoke.ts",
+    "verify:auth": "node --import tsx scripts/verify-four-layer-auth.ts",
     "doctor": "node --import tsx scripts/doctor.ts",
     "demo": "node --import tsx scripts/demo.ts",
     "backup": "node --import tsx scripts/backup.ts",

@@ -4,11 +4,14 @@
  * - 状态查询有并发去重与短缓存，避免多个页面轮询时反复调用 colima / docker；
  * - VM / 容器管理动作在后台执行，同一部署同时只允许一个操作，页面轮询看结果；
  * - 桌面：启动前按 L0 实测策略准入（默认并发 2、硬上限 3、内存压力 warn 拒绝、0.7GB/桌面预算）；
- *   每次打开都生成新的桌面令牌并经 stdin 交给 box，随后与 box 网关握手；
+ *   每次打开都生成新的一次性网关令牌，经 stdin 交给 box（第二行是 VNC 口令），
+ *   与网关握手后再由服务端完成 VncAuth；口令不进日志、不进 API；
  *   统计查看者，无人查看超过 idleStopMinutes 的桌面自动停止；
  * - 错误只记录固定错误码，不记录命令输出；令牌不写日志、不返回给浏览器。
  */
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { dirname, join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import type {
   BoxAction, BoxDeployment, BoxDeploymentList, BoxDesktop, BoxDesktopPolicy, BoxOperation, CreateCloudBoxCommand,
@@ -17,6 +20,7 @@ import { defaultCommandRunner, type CommandRunner } from './command.js';
 import { BoxStore, type CloudDeploymentRecord } from './box-store.js';
 import { AgentBroker, CloudAgentAdapter, CloudSshAdapter } from './cloud-adapters.js';
 import { gateHandshake, newDesktopToken } from './gate.js';
+import { authenticateRfb } from '../rfb-preauth.js';
 import { BOX_NAMES, BoxError, resolveBoxNames, type BoxNames, type BoxSnapshot, type HostAdapter } from './host-adapter.js';
 import { localAdapterFor } from './local-adapters.js';
 import { admitDesktop, desktopPolicyFromEnv } from './policy.js';
@@ -68,6 +72,9 @@ export class BoxService {
   private readonly now: () => number;
   private readonly cacheMs: number;
   private readonly sweepTimer: NodeJS.Timeout | undefined;
+  /** 每桌面 VNC 口令（内存 + 0600 文件）。明文不进日志、不进响应。 */
+  private readonly passwords = new Map<string, string>();
+  private readonly secretsFile: string;
 
   constructor(options: BoxServiceOptions) {
     this.platform = options.platform ?? process.platform;
@@ -78,6 +85,8 @@ export class BoxService {
     this.names = resolveBoxNames(options.env ?? process.env, options.names);
     this.local = options.localAdapter === null ? undefined : options.localAdapter ?? localAdapterFor(this.platform, this.run, this.names);
     this.store = new BoxStore(join(options.dataDir, 'box.sqlite'), this.now);
+    this.secretsFile = join(options.dataDir, 'box-vnc-secrets.json');
+    this.loadPasswords();
     const interval = options.sweepIntervalMs ?? 60_000;
     if (interval > 0) {
       this.sweepTimer = setInterval(() => { void this.sweepIdleDesktops(); }, interval);
@@ -212,19 +221,45 @@ export class BoxService {
     if (!/^d[1-9]$/.test(desktopId) || Number(desktopId.slice(1)) > this.policy.max) throw new BoxError('BOX_DESKTOP_NOT_FOUND', '桌面不存在。', 404);
   }
 
-  /** 准入通过后启动（或只轮换令牌）；返回本次使用的新令牌。 */
-  private async ensureDesktop(id: string, adapter: HostAdapter, desktopId: string): Promise<string> {
+  private loadPasswords(): void {
+    try {
+      const parsed = JSON.parse(readFileSync(this.secretsFile, 'utf8')) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object') return;
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'string' && value.length >= 8 && !value.includes('\n')) this.passwords.set(key, value);
+      }
+    } catch { /* 首次启动或文件损坏：下次启动桌面会重新生成口令 */ }
+  }
+
+  private persistPasswords(): void {
+    mkdirSync(dirname(this.secretsFile), { recursive: true });
+    writeFileSync(this.secretsFile, JSON.stringify(Object.fromEntries(this.passwords)), { mode: 0o600 });
+  }
+
+  /** 8 个可打印字符：VNC DES 只用前 8 字节。从不记录、不回显。 */
+  private passwordFor(key: string): string {
+    const existing = this.passwords.get(key);
+    if (existing) return existing;
+    const next = randomBytes(8).toString('base64url').slice(0, 8);
+    this.passwords.set(key, next);
+    this.persistPasswords();
+    return next;
+  }
+
+  /** 准入通过后启动（或只轮换令牌）；返回本次使用的新令牌与 VNC 口令。 */
+  private async ensureDesktop(id: string, adapter: HostAdapter, desktopId: string): Promise<{ token: string; password: string }> {
     const snapshot = await this.snapshot(id, adapter, true);
     const refusal = admitDesktop(snapshot, desktopId, this.policy);
     if (refusal) throw refusal;
     const token = newDesktopToken();
-    await adapter.desktop('start', desktopId, token);
-    this.cache.delete(id);
     const key = `${id}/${desktopId}`;
+    const password = this.passwordFor(key);
+    await adapter.desktop('start', desktopId, token, password);
+    this.cache.delete(id);
     const session = this.sessions.get(key);
     if (session) { session.running = true; session.lastActiveAt = this.now(); }
     else this.sessions.set(key, { running: true, viewers: 0, lastActiveAt: this.now() });
-    return token;
+    return { token, password };
   }
 
   async startDesktop(id: string, desktopId: string): Promise<BoxDeployment> {
@@ -241,6 +276,8 @@ export class BoxService {
       await adapter.desktop('stop', desktopId);
       const session = this.sessions.get(`${id}/${desktopId}`);
       if (session) session.running = false;
+      this.passwords.delete(`${id}/${desktopId}`);
+      this.persistPasswords();
       this.cache.delete(id);
     });
     return this.present(id, adapter, await this.snapshot(id, adapter, true), record);
@@ -255,9 +292,10 @@ export class BoxService {
     const { adapter } = this.adapterFor(id);
     const key = `${id}/${desktopId}`;
     const stream = await this.exclusive(key, async () => {
-      const token = await this.ensureDesktop(id, adapter, desktopId);
+      const { token, password } = await this.ensureDesktop(id, adapter, desktopId);
       const gate = await adapter.openGate();
-      return gateHandshake(gate, desktopId, token);
+      const raw = await gateHandshake(gate, desktopId, token);
+      return authenticateRfb(raw, password);
     });
     const session = this.sessions.get(key)!;
     session.viewers += 1;

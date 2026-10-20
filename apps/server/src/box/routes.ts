@@ -10,7 +10,7 @@
  *   POST   /api/box/deployments/:id/desktops/:d/start  启动桌面（并发上限 / 内存压力 / 预算准入）
  *   POST   /api/box/deployments/:id/desktops/:d/stop   停止桌面
  *   UPGRADE /api/box/deployments/:id/desktops/:d/vnc  noVNC 的 WebSocket：server 鉴权并终结 WebSocket，
- *          再经 box 网关（每桌面 120 秒内可重复使用的令牌）连到桌面的 unix socket，桌面从不直接暴露
+ *          再经 box 网关（每桌面 60 秒一次性令牌）连到桌面的 unix socket，桌面从不直接暴露
  *
  * 主机守护进程侧（不使用 Cookie / CSRF / 桌面令牌，由票据或 machine 凭据鉴权）：
  *   POST   /api/box/agent/register | heartbeat | poll
@@ -22,10 +22,13 @@
  */
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { BoxAction, CreateCloudBoxCommand } from '@personal-agent/contracts';
+import type { BoxAction, CreateCloudBoxCommand, DeviceRole } from '@personal-agent/contracts';
+import { createOneTimeTicketStore } from '@personal-agent/runtime';
 import { bearerToken, type UpgradeAuthorization } from '../access-control.js';
+import { offerRfbNoneToBrowser, websocketRfbPeer } from '../rfb-preauth.js';
+import { RfbViewOnlyFilter } from '../rfb-view-only.js';
 import { BoxError } from './host-adapter.js';
 import { fakeBoxDeployments } from './fake-adapter.js';
 import type { BoxService } from './service.js';
@@ -38,7 +41,25 @@ export interface BoxRouteOptions {
   /** false 时不挂载 /api/box/agent/*（含隧道）。关闭 box 或 demo 时应为 false。 */
   agentRoutes?: boolean;
   authorizeUpgrade(request: IncomingMessage, kind: 'browser' | 'agent'): UpgradeAuthorization;
-  requireActive(request: import('fastify').FastifyRequest): void;
+  requireActive(request: FastifyRequest): void;
+  identity?(request: FastifyRequest): { role: DeviceRole; clientDevice?: { id: string } } | undefined;
+  now?: () => number;
+}
+
+export const DESKTOP_TICKET_TTL_MS = 60_000;
+export const DESKTOP_TICKET_HEADER = 'x-pa-desktop-ticket';
+const DESKTOP_TICKET_PROTOCOL = /^pa-dt\.([A-Za-z0-9_-]{43})$/u;
+
+export function readDesktopTicket(request: IncomingMessage): string | undefined {
+  const raw = request.rawHeaders;
+  const headers = raw.filter((_, index) => index % 2 === 1 && raw[index - 1].toLowerCase() === DESKTOP_TICKET_HEADER);
+  if (headers.length === 1 && typeof headers[0] === 'string') return headers[0];
+  const protocols = String(request.headers['sec-websocket-protocol'] ?? '').split(',').map(item => item.trim());
+  for (const protocol of protocols) {
+    const match = DESKTOP_TICKET_PROTOCOL.exec(protocol);
+    if (match) return match[1];
+  }
+  return undefined;
 }
 
 const demoFakeOnly = { code: 'DEMO_FAKE_ONLY', message: '此公开演示只展示 fake 云电脑，不会启动、连接或代理任何真实机器。' };
@@ -71,9 +92,13 @@ export function isWebSocketHandshake(request: IncomingMessage): boolean {
  * WebSocket ⇄ RFB 字节流。WebSocket 协议由 server（ws 库）终结，box 内不需要 websockify：
  * 浏览器发来的二进制消息原样写入网关流，网关流的数据作为二进制消息发回浏览器。
  */
-export function bridgeWebSocket(ws: WebSocket, stream: Duplex, onActivity: () => void, onClose: () => void): void {
+export function bridgeWebSocket(ws: WebSocket, stream: Duplex, onActivity: () => void, onClose: () => void, control = true): {
+  /** 握手积压帧走同一条只读过滤路径，避免 ClientInit 之后的键鼠漏过。 */
+  ingest(chunk: Buffer): void;
+} {
   let closed = false;
   let lastActivity = 0;
+  const filter = control ? undefined : new RfbViewOnlyFilter();
   const activity = () => { const now = Date.now(); if (now - lastActivity > 5_000) { lastActivity = now; onActivity(); } };
   const close = () => {
     if (closed) return;
@@ -82,11 +107,17 @@ export function bridgeWebSocket(ws: WebSocket, stream: Duplex, onActivity: () =>
     if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(1000);
     onClose();
   };
+  const ingest = (chunk: Buffer) => {
+    if (closed || !chunk.length) return;
+    activity();
+    const filtered = filter?.filter(chunk);
+    if (filtered && 'error' in filtered) { ws.close(1008, 'invalid view-only RFB stream'); close(); return; }
+    const forward = filtered?.forward ?? chunk;
+    if (forward.length) stream.write(forward);
+  };
   ws.on('message', (data: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => {
     if (!isBinary) { ws.close(1003); return; }
-    const chunk = Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data);
-    activity();
-    stream.write(chunk);
+    ingest(Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data));
   });
   stream.on('data', (chunk: Buffer) => {
     activity();
@@ -98,12 +129,16 @@ export function bridgeWebSocket(ws: WebSocket, stream: Duplex, onActivity: () =>
   stream.once('close', close);
   stream.once('error', close);
   stream.resume();
+  return { ingest };
 }
 
 export function installBoxRoutes(app: FastifyInstance, options: BoxRouteOptions): void {
   const { service, demo } = options;
   const agentRoutes = options.agentRoutes !== false && !!service;
   const openSockets = new Set<Duplex>();
+  const tickets = createOneTimeTicketStore<{ deviceId?: string; deploymentId: string; desktopId: string; control: boolean }>({
+    ttlMs: DESKTOP_TICKET_TTL_MS, now: options.now,
+  });
   let closing = false;
   let registerWindow = Date.now(), registerCount = 0;
 
@@ -164,6 +199,28 @@ export function installBoxRoutes(app: FastifyInstance, options: BoxRouteOptions)
     options.requireActive(request);
     try { return reply.code(201).send({ deploymentId: request.params.id, ...box.store.issueTicket(request.params.id) }); }
     catch (error) { return fail(reply, error); }
+  });
+
+  app.post<{ Params: { id: string; desktopId: string } }>(`/api/box/deployments/:id/desktops/:desktopId/tickets`, {
+    schema: { params: { type: 'object', properties: { id: { type: 'string', pattern: deploymentId }, desktopId: { type: 'string', pattern: '^d[1-3]$' } } } },
+  }, async (request, reply) => {
+    const box = real(reply); if (!box) return reply;
+    options.requireActive(request);
+    const identity = options.identity?.(request);
+    const control = identity?.role !== 'observer';
+    const minted = tickets.mint({
+      deviceId: identity?.clientDevice?.id,
+      deploymentId: request.params.id,
+      desktopId: request.params.desktopId,
+      control,
+    });
+    return {
+      ticket: minted.token,
+      expiresAt: new Date(minted.expiresAtMs).toISOString(),
+      control,
+      deploymentId: request.params.id,
+      desktopId: request.params.desktopId,
+    };
   });
 
   for (const op of ['start', 'stop'] as const) {
@@ -260,6 +317,12 @@ export function installBoxRoutes(app: FastifyInstance, options: BoxRouteOptions)
     }
 
     if (!isWebSocketHandshake(request)) { rejectUpgrade(socket, 400, 'WEBSOCKET_REQUIRED'); return; }
+    const ticketValue = readDesktopTicket(request);
+    const ticket = ticketValue ? tickets.consume(ticketValue, options.now?.(), payload => {
+      return payload.deploymentId === vnc![1] && payload.desktopId === vnc![2]
+        && (payload.deviceId === undefined || payload.deviceId === authorization.deviceId);
+    }) : undefined;
+    if (!ticket) { rejectUpgrade(socket, 401, 'DESKTOP_TICKET_REQUIRED'); return; }
     const [, id, desktopId] = vnc!;
     track(socket);
     let release: (() => void) | undefined;
@@ -276,9 +339,27 @@ export function installBoxRoutes(app: FastifyInstance, options: BoxRouteOptions)
       track(opened.stream);
       wss.handleUpgrade(request, socket, head, ws => {
         upgraded = true;
-        bridgeWebSocket(ws, opened.stream, () => service.touchDesktop(id, desktopId), () => { release?.(); release = undefined; opened.release(); });
-        // 会话被撤销（配对设备吊销）时立即断开。
-        if (authorization.subscribeInvalidation) { release?.(); release = authorization.subscribeInvalidation(() => ws.close(1008)); }
+        const control = ticket.control && authorization.role !== 'observer';
+        const start = () => {
+          const bridge = bridgeWebSocket(ws, opened.stream, () => service.touchDesktop(id, desktopId), () => { release?.(); release = undefined; opened.release(); }, control);
+          if (authorization.subscribeInvalidation) { release?.(); release = authorization.subscribeInvalidation(() => ws.close(1008)); }
+          return bridge;
+        };
+        // 服务端已完成 VncAuth；这里向浏览器呈现 None，口令永远不离开服务端。
+        const peer = websocketRfbPeer(ws);
+        void offerRfbNoneToBrowser(peer, opened.stream).then(() => {
+          // noVNC 在 ClientInit 之后会立刻发像素格式 / 编码 / 帧请求。先接管桥，
+          // 积压帧再走 ingest，只读会话的键鼠不会绕过过滤器。
+          const leftover = peer.drain?.() ?? [];
+          const { ingest } = start();
+          for (const chunk of leftover) ingest(chunk);
+        }, () => {
+          peer.drain?.();
+          release?.();
+          opened.stream.destroy();
+          opened.release();
+          if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(1008, 'desktop authentication failed');
+        });
       });
     }, (error: unknown) => {
       release?.();
