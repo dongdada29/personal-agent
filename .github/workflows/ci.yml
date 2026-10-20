@@ -19,6 +19,7 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
+          - windows-latest
         node:
           - '22.18.0'
           - '24.x'
@@ -64,3 +65,49 @@ jobs:
 
       - name: Share check
         run: npm run share:check
+
+  desktop:
+    name: desktop ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: mac
+          - os: windows-latest
+            target: win
+          - os: ubuntu-latest
+            target: linux
+    env:
+      # 产物不签名；禁止 electron-builder 在 CI 里寻找本机证书。
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      # npm ci --ignore-scripts 不会下载 Electron 二进制；打包与冒烟需要它。
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
+      - name: Build web and desktop bundles
+        run: npm run build
+
+      - name: Bundle the desktop server
+        run: node apps/desktop/scripts/build.mjs --skip-web
+
+      - name: Smoke the bundled server
+        run: node apps/desktop/scripts/smoke-bundle.mjs
+
+      - name: Package
+        working-directory: apps/desktop
+        run: npx electron-builder --config electron-builder.yml --${{ matrix.target }} --publish never

@@ -23,6 +23,8 @@ Independent developers often want to hand a goal to AI without giving up control
 - **Durable events and recovery**: SQLite stores tasks, events, approvals, artifacts, and process ownership records; closing the page does not cancel work.
 - **No-account fake demo**: the fake engine demonstrates the state flow in a temporary data directory without calling a real model.
 - **Paired remote access path**: the author's instance is online through Cloudflare Named Tunnel in paired mode; full physical-phone mobile-network acceptance still needs target-environment validation.
+- **Desktop client**: Electron can host or attach to a local instance; the renderer only sees `app://` and never the launch token.
+- **Linux cloud computer**: manage Colima / WSL2 / Podman locally and SSH or an outbound host daemon in the cloud; desktops open only through the authenticated proxy.
 
 ## Five-minute local demo
 
@@ -72,13 +74,13 @@ flowchart TD
 
 ### Current status
 
-The current release is **v0.1.0** (`eeeca3c`), with **753 tests across 37 files**. CI runs typecheck, the full test suite, build, doctor, smoke, the demo self-check, and the share check on Ubuntu and macOS with Node 22.18.0 and 24.x. Automated tests use temporary Git repositories, fake/mock engines, verification subprocesses, and virtual devices; they do not call real models or authorize real devices.
+The current release is **v0.1.0** (`eeeca3c`). This branch adds the desktop client and Linux cloud computer on top of that. CI runs typecheck, the full test suite, build, doctor, smoke, the demo self-check, and the share check on Ubuntu, macOS, and Windows with Node 22.18.0 and 24.x, and also packages unsigned dmg / nsis / AppImage builds. Automated tests use temporary Git repositories, fake/mock engines, verification subprocesses, and virtual devices; they do not call real models or authorize real devices.
 
-The workbench supports narrow screens and defaults to loopback access. Public access must use paired mode behind an HTTPS reverse proxy or Cloudflare Named Tunnel. The author's instance is online through Named Tunnel and paired mode; physical-phone mobile-network flows for create, approve, take over, reconnect, accept, and revoke still need target-environment acceptance. Windows process management is unsupported, and a single-machine deployment has no redundancy or automatic failover.
+The workbench supports narrow screens and defaults to loopback access. Public access must use paired mode behind an HTTPS reverse proxy or Cloudflare Named Tunnel. The author's instance is online through Named Tunnel and paired mode; physical-phone mobile-network flows for create, approve, take over, reconnect, accept, and revoke still need target-environment acceptance. A single-machine deployment has no redundancy or automatic failover. Windows process ownership is implemented; remaining gaps are listed in [windows-gaps.md](docs/windows-gaps.md).
 
 ### First local demo
 
-Install Node.js **22.18 or newer**, npm, and Git. Process management currently supports macOS/Linux POSIX; other target machines need their own verification, and Windows is not supported.
+Install Node.js **22.18 or newer**, npm, and Git. Process management supports macOS, Linux, and Windows; remaining Windows gaps are listed in [windows-gaps.md](docs/windows-gaps.md).
 
 From the source directory, run:
 
@@ -130,6 +132,8 @@ npm exec --yes --package playwright -- node scripts/capture-demo-assets.mjs
 | Restart recovery | registered process ownership is verified; active tasks become interrupted and resume only on user request |
 | Instance settings | agent profiles and timeouts; a task snapshots settings at creation time |
 | Device access | explicit paired mode, one-time pairing, CSRF protection, and device revocation; loopback by default |
+| Desktop client | Electron hosts the bundled server or connects to `127.0.0.1:47801`; see [desktop client](docs/desktop.md) |
+| Linux cloud computer | local Colima (default 2 vCPU / 4 GiB / 40 GiB) or a cloud host; desktops only through the authenticated proxy |
 
 A single instance runs one task at a time in FIFO order, with up to two engine sessions during analysis. `completed` means execution ended; `accepted` means the human accepted delivery. Accepting a result does not commit, merge, push, or deploy code. Worktree isolation protects Git changes, not the operating system.
 
@@ -159,11 +163,13 @@ The service always listens on `127.0.0.1:47801`; the default no-login loopback m
 
 | Directory | Responsibility |
 | --- | --- |
-| `apps/server` | Fastify 5 API, SSE, same-origin Web serving, instance lock, and startup recovery |
-| `apps/web` | React 18 / Vite 5 / Antd 5 browser workbench |
+| `apps/server` | Fastify 5 API, SSE, same-origin Web serving, instance lock, startup recovery, and the box proxy |
+| `apps/web` | React 18 / Vite 5 / Antd 5 workbench shared by the browser and the desktop client |
+| `apps/desktop` | Electron main process, `app://` proxy, managed and connect modes |
+| `deploy/box` | hardened pa-box image, seccomp, Xvnc unix sockets, and the gate |
 | `packages/contracts` | shared types, task state machine, and error contracts |
 | `packages/runtime` | Node SQLite, ACP, worktrees, pipeline, verification, checkpoints, and process ledger |
-| `scripts` | local demo, fixture, restricted Claude probe, backup check, and explicit pairing operations |
+| `scripts` | local demo, fixture, restricted Claude probe, backup check, explicit pairing, and box installers |
 
 The project uses npm workspaces and TypeScript ESM. Dependencies are locked by `package-lock.json`; ACP SDK is **1.3.0** and Claude ACP is **0.65.0**. Model credentials are read by the engine from native local configuration. The project does not provide login or credential migration and does not require model secrets in `.env`.
 
