@@ -81,7 +81,8 @@ describe('cloud agent end to end: ticket registration, heartbeat, long-poll desk
 
     const running = new Set<string>();
     const dockerCalls: { args: string[]; input?: string }[] = [];
-    class FakeDockerDaemon extends hostd.HostDaemon {
+    const HostDaemon: new (config: Record<string, unknown>, credential: unknown) => any = hostd.HostDaemon;
+    class FakeDockerDaemon extends HostDaemon {
       async docker(args: string[], options: { input?: string } = {}) {
         dockerCalls.push({ args, input: options.input });
         const line = args.join(' ');
