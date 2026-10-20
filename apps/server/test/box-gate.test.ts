@@ -90,7 +90,8 @@ describe.skipIf(!python)('pa-box-gate (real Python gate, temp run dir, loopback 
 
 describe.skipIf(!python || !bash)('box image scripts', () => {
   it('are syntactically valid bash and python', () => {
-    for (const script of [ctl, join(boxLib, 'entrypoint.sh'), join(boxLib, 'start-desktop.sh')]) execFileSync(bash!, ['--noprofile', '--norc', '-n', script]);
+    const hostScripts = ['colima-pa-box.sh', 'install-cloud-host.sh'].map(name => join(root, 'scripts', 'box', name));
+    for (const script of [ctl, join(boxLib, 'entrypoint.sh'), join(boxLib, 'start-desktop.sh'), ...hostScripts]) execFileSync(bash!, ['--noprofile', '--norc', '-n', script]);
     for (const script of ['pa-box-gate.py', 'no-tcp-listen.py']) {
       execFileSync(python!, ['-I', '-c', 'import ast,sys; ast.parse(open(sys.argv[1]).read())', join(boxLib, script)]);
     }
