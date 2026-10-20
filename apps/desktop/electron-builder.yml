@@ -1,0 +1,55 @@
+# Personal Agent 桌面客户端打包配置（electron-builder 26）。
+# 产物不签名（mac identity: null，Windows 不配置证书）；首次打开需手动放行，见 docs/desktop.md。
+appId: io.github.dongdada29.personal-agent
+productName: Personal Agent
+executableName: personal-agent
+copyright: Apache-2.0
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+  - "!dist/**/*.map"
+  # 只保留当前平台的 Claude CLI（npm 按平台安装 optionalDependencies），去掉 musl 变体。
+  - "!node_modules/@anthropic-ai/*-musl/**"
+asar: true
+# server 由 Electron 自带 Node 以普通文件方式执行；任务 owner 包装脚本的路径要出现在命令行里供核对；
+# claude-code-acp-ts 及其原生 CLI 必须是磁盘上的真实文件才能被 spawn。主进程与页面仍在 asar 中。
+asarUnpack:
+  - dist/server/**
+  - node_modules/**
+npmRebuild: false
+nodeGypRebuild: false
+electronLanguages:
+  - en-US
+  - zh-CN
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  category: public.app-category.developer-tools
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+dmg:
+  writeUpdateInfo: false
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  differentialPackage: false
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  category: Development
+publish: null

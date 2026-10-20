@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "node --import tsx apps/server/src/main.ts",
     "dev:web": "npm run dev --workspace @personal-agent/web",
-    "typecheck": "tsc --noEmit && npm run typecheck --workspace @personal-agent/web",
+    "typecheck": "tsc --noEmit && npm run typecheck --workspace @personal-agent/web && npm run typecheck --workspace @personal-agent/desktop",
     "test": "vitest run",
     "build": "npm run typecheck && npm run build --workspace @personal-agent/web",
     "probe:claude": "node --import tsx scripts/probe-claude.ts",
@@ -19,7 +19,10 @@
     "doctor": "node --import tsx scripts/doctor.ts",
     "demo": "node --import tsx scripts/demo.ts",
     "backup": "node --import tsx scripts/backup.ts",
-    "share:check": "node --import tsx scripts/share-check.ts"
+    "share:check": "node --import tsx scripts/share-check.ts",
+    "desktop:build": "npm run build --workspace @personal-agent/desktop",
+    "desktop:dev": "npm run dev --workspace @personal-agent/desktop",
+    "desktop:dist": "npm run dist --workspace @personal-agent/desktop"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

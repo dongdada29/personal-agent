@@ -2,12 +2,15 @@
   "name": "@personal-agent/desktop",
   "version": "0.1.0",
   "private": true,
+  "productName": "Personal Agent",
   "description": "Personal Agent Electron desktop client (managed and connect modes).",
+  "author": "Personal Agent contributors",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/main.cjs",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "smoke": "node scripts/smoke-bundle.mjs",
     "dev": "node scripts/build.mjs && electron .",
     "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -18,6 +21,7 @@
     "dist:dir": "node scripts/build.mjs && electron-builder --config electron-builder.yml --dir --publish never"
   },
   "dependencies": {
+    "claude-code-acp-ts": "0.65.0",
     "ws": "8.18.3"
   },
   "devDependencies": {
