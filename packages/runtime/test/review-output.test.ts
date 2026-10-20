@@ -5,7 +5,8 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { methods, PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
 import { parseReviewResult, ReviewResultError } from '@personal-agent/contracts';
 import { createAcpEngineAdapter } from '../src/engine-acp.js';
-import type { EngineEvent, EngineSession } from '../src/engine.js';
+import { engineStartupTimeoutMs, type EngineEvent, type EngineSession } from '../src/engine.js';
+import { nodeEsmSpecifier } from '../src/process-windows.js';
 
 const passing = { verdict: 'pass', blockers: [], evidence: ['feature.txt:1', 'Runtime verification exitCode=0'] };
 const rework = { verdict: 'rework', blockers: ['Missing an edge case'], evidence: ['feature.txt:1'] };
@@ -66,8 +67,9 @@ async function open(scenario: Scenario) {
     });
   `);
   const events: EngineEvent[] = [];
-  const session = await createAcpEngineAdapter({ command: process.execPath, args: [path],
-    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot }, startupTimeoutMs: 3_000, promptTimeoutMs: 3_000,
+  const session = await createAcpEngineAdapter({ command: process.execPath, args: [nodeEsmSpecifier(path)],
+    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
+    startupTimeoutMs: process.platform === 'win32' ? engineStartupTimeoutMs() : 3_000, promptTimeoutMs: 3_000,
   }).open({ taskId: 'task', attemptId: 'attempt', runId: 'review-output-run', cwd, mode: 'plan', role: 'reviewer' },
     { onEvent: event => { events.push(event); } });
   sessions.push(session);

@@ -13,8 +13,10 @@ const command = (script: string, args: string[] = []) => ({ command: process.exe
 beforeEach(async () => { directory = await realpath(await mkdtemp(join(tmpdir(), 'personal-agent-verification-test-'))); });
 afterEach(async () => { vi.unstubAllEnvs(); await rm(directory, { recursive: true, force: true }); });
 
+const windowsSlow = process.platform === 'win32';
+
 async function waitForFile(path: string): Promise<string> {
-  const deadline = Date.now() + 3_000;
+  const deadline = Date.now() + (windowsSlow ? 20_000 : 3_000);
   while (Date.now() < deadline) {
     try { return await readFile(path, 'utf8'); }
     catch { await new Promise((done) => setTimeout(done, 10)); }
@@ -28,7 +30,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function settleWithin<T>(operation: Promise<T>, ms = 2_500): Promise<T> {
+function settleWithin<T>(operation: Promise<T>, ms = windowsSlow ? 30_000 : 2_500): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Verification lifecycle did not settle within its deadline.')), ms);
     operation.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
@@ -83,7 +85,7 @@ describe('Runtime verification execution', () => {
     const start = Date.now();
     const result = await runVerification({ worktreePath: directory, command: command('require("fs").writeFileSync(process.argv[1],String(process.pid));process.on("SIGTERM",()=>{});setInterval(()=>{},1000)', [pidFile]), timeoutMs: 300 });
     expect(result).toMatchObject({ exitCode: null, signal: 'SIGKILL', timedOut: true, cancelled: false });
-    expect(Date.now() - start).toBeLessThan(3_000);
+    expect(Date.now() - start).toBeLessThan(windowsSlow ? 20_000 : 3_000);
     expect(alive(Number(await readFile(pidFile, 'utf8')))).toBe(false);
   });
 

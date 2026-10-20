@@ -3,10 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  parseWindowsProcessTable, quoteWindowsArg, resolveWindowsCommand, terminateWindowsIdentities, windowsCommandLineToArgv,
+  nodeEsmSpecifier, parseWindowsProcessTable, quoteWindowsArg, resolveWindowsCommand, terminateWindowsIdentities, windowsCommandLineToArgv,
   windowsDescendants, windowsOwnerCommandMatches, windowsProcessQueryScript, type WindowsProcessRow,
 } from '../src/process-windows.js';
-import { classifyWindowsOwner, ownedProcessSpawnOptions, ownerReadyDeadlineMs, processOwnerWrapperPath, recoverOwnedProcesses, spawnOwnedProcess,
+import { engineStartupTimeoutMs } from '../src/engine.js';
+import { classifyWindowsOwner, ownedProcessSpawnOptions, ownerIdentityDeadlineMs, ownerReadyDeadlineMs, processOwnerWrapperPath, recoverOwnedProcesses, spawnOwnedProcess,
   verifyProcessOwner, type OwnedProcessRecord } from '../src/process-registry.js';
 
 const EXEC = 'C:\\Program Files\\nodejs\\node.exe';
@@ -53,10 +54,18 @@ describe('Windows process table', () => {
 
   it('only embeds numeric PID filters in the query script', () => {
     expect(windowsProcessQueryScript([12, 34])).toContain('-Filter "ProcessId=12 OR ProcessId=34"');
-    expect(windowsProcessQueryScript([12])).toContain('-Property ProcessId,ParentProcessId,CreationDate,CommandLine');
-    expect(windowsProcessQueryScript([12])).toContain('-OperationTimeoutSec 5');
+    // 按 PID 查身份时不能用 -Property，否则 CommandLine 为空。
+    expect(windowsProcessQueryScript([12])).not.toContain('-Property');
+    expect(windowsProcessQueryScript([12])).toContain('l=$_.CommandLine');
     expect(windowsProcessQueryScript()).not.toContain('-Filter');
+    expect(windowsProcessQueryScript()).toContain('-Property ProcessId,ParentProcessId,CreationDate');
     expect(windowsProcessQueryScript()).toContain('-InputObject $rows');
+  });
+
+  it('converts Windows paths to file:// ESM specifiers and leaves POSIX paths alone', () => {
+    expect(nodeEsmSpecifier('D:\\a\\file.ts', 'win32')).toBe('file:///D:/a/file.ts');
+    expect(nodeEsmSpecifier('file:///D:/a/file.ts', 'win32')).toBe('file:///D:/a/file.ts');
+    expect(nodeEsmSpecifier('/tmp/file.ts', 'linux')).toBe('/tmp/file.ts');
   });
 
   it('finds orphaned descendants and ignores children of a reused parent PID', () => {
@@ -119,6 +128,10 @@ describe('Windows owner spawn options', () => {
     expect(ownedProcessSpawnOptions('darwin').stdio[3]).toBe('pipe');
     expect(ownerReadyDeadlineMs('win32')).toBe(15_000);
     expect(ownerReadyDeadlineMs('linux')).toBe(3_000);
+    expect(ownerIdentityDeadlineMs('win32')).toBe(15_000);
+    expect(ownerIdentityDeadlineMs('linux')).toBe(0);
+    expect(engineStartupTimeoutMs('win32')).toBe(45_000);
+    expect(engineStartupTimeoutMs('linux')).toBe(15_000);
   });
 });
 

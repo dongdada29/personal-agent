@@ -1,6 +1,11 @@
 import type { AgentRole, TaskConfigurationSnapshot } from '@personal-agent/contracts';
 import type { ProcessLifecycleHooks } from './process-registry.js';
 
+/** Windows：owner READY + WMI 身份重试 + ACP 握手；POSIX 维持原 15s 上限。 */
+export function engineStartupTimeoutMs(platform: NodeJS.Platform = process.platform): number {
+  return platform === 'win32' ? 45_000 : 15_000;
+}
+
 export interface EngineConfig {
   command: string;
   args?: string[];

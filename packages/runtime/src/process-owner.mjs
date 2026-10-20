@@ -5,6 +5,14 @@
 import { spawn } from 'node:child_process';
 import { Socket } from 'node:net';
 import { StringDecoder } from 'node:string_decoder';
+import { pathToFileURL } from 'node:url';
+
+/** Windows ESM loader treats `D:\file.mjs` as protocol `d:`; Node module args must be file://. */
+function windowsNodeModuleArg(arg) {
+  if (process.platform !== 'win32' || typeof arg !== 'string' || arg.startsWith('file:') || arg.startsWith('--')) return arg;
+  if (!/^[A-Za-z]:[\\/]/.test(arg) || !/\.(mjs|cjs|js|ts)$/i.test(arg)) return arg;
+  return pathToFileURL(arg).href;
+}
 
 const marker = process.argv[2];
 if (process.argv.length !== 3 || !/^--personal-agent-owner=[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(marker ?? '')) process.exit(125);
@@ -53,7 +61,7 @@ const startChild = (request) => {
   delete env.NODE_UNIQUE_ID;
   delete env.PERSONAL_AGENT_OWNER_IPC;
   if (process.versions.electron && request.command !== process.execPath) delete env.ELECTRON_RUN_AS_NODE;
-  child = spawn(request.command, request.args, { detached: false, shell: false, windowsHide: true, env, stdio: ['inherit', 'inherit', 'inherit'] });
+  child = spawn(request.command, request.args.map(windowsNodeModuleArg), { detached: false, shell: false, windowsHide: true, env, stdio: ['inherit', 'inherit', 'inherit'] });
   // Windows has no process groups: the parent records this PID (and its creation
   // time) so orphaned descendants can still be found after this owner exits.
   if (child.pid !== undefined) send({ type: 'CHILD', pid: child.pid });

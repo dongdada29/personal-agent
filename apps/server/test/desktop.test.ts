@@ -5,8 +5,8 @@ import { request } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { nodeEsmSpecifier } from '@personal-agent/runtime';
 import { buildApp } from '../src/app.js';
 import { assertLoopbackAddress, startDesktopServer } from '../src/desktop.js';
 
@@ -104,8 +104,8 @@ describe('desktop token mode', () => {
 
 describe('desktop-main IPC entry', () => {
   const entryPath = join(import.meta.dirname, '..', 'src', 'desktop-main.ts');
-  const entry = process.platform === 'win32' ? pathToFileURL(entryPath).href : entryPath;
-  const tsx = createRequire(import.meta.url).resolve('tsx');
+  const entry = nodeEsmSpecifier(entryPath);
+  const tsx = nodeEsmSpecifier(createRequire(import.meta.url).resolve('tsx'));
   function launch() {
     const child = fork(entry, [], { execArgv: ['--import', tsx], stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: { ...process.env, PERSONAL_AGENT_DATA_DIR: '' } });

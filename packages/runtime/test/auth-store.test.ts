@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AuthSecurityConfig } from '@personal-agent/contracts';
 import { AuthStore } from '../src/auth-store.js';
 import { TaskStore } from '../src/store.js';
+import { nodeEsmSpecifier } from '../src/process-windows.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
-const loader = require.resolve('tsx');
+
+const loader = nodeEsmSpecifier(require.resolve('tsx'));
 const authModuleUrl = new URL('../src/auth-store.ts', import.meta.url).href;
 const baseTime = Date.parse('2026-10-02T00:00:00.000Z');
 const policy: AuthSecurityConfig = { mode: 'paired', publicOrigin: 'https://fixture.example.invalid' };
@@ -48,7 +50,7 @@ async function exchangeWorker(filename: string, now: number) {
       catch (error) { process.send({ ok: false, code: error.code }); }
       finally { auth.close(); process.disconnect(); }
     });`);
-  const child = spawn(process.execPath, ['--import', loader, script, filename, String(now)],
+  const child = spawn(process.execPath, ['--import', loader, nodeEsmSpecifier(script), filename, String(now)],
     { env: { PATH: process.env.PATH }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   children.push(child);
   const exit = new Promise<void>(resolve => child.once('exit', () => resolve()));

@@ -5,7 +5,7 @@ export default defineConfig({
     include: ['packages/**/test/**/*.test.ts', 'apps/server/test/**/*.test.ts', 'apps/web/test/**/*.test.ts', 'scripts/test/**/*.test.ts', 'apps/desktop/test/**/*.test.ts'],
     environment: 'node',
     pool: 'forks',
-    testTimeout: 15_000,
-    hookTimeout: 15_000,
+    testTimeout: process.platform === 'win32' ? 60_000 : 15_000,
+    hookTimeout: process.platform === 'win32' ? 60_000 : 15_000,
   },
 });

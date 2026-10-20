@@ -80,6 +80,11 @@ export function ownerReadyDeadlineMs(platform: NodeJS.Platform = process.platfor
   return platform === 'win32' ? 15_000 : 3_000;
 }
 
+/** Windows：WMI CommandLine 在进程刚出现时可能仍为空，与 READY 并行查询后还要允许重试。 */
+export function ownerIdentityDeadlineMs(platform: NodeJS.Platform = process.platform): number {
+  return platform === 'win32' ? 15_000 : 0;
+}
+
 /** Recovery never trusts a saved PID alone, and never returns argv or env. */
 export async function verifyProcessOwner(record: OwnedProcessRecord): Promise<'owned' | 'gone' | 'unsafe'> {
   if (!supported() || !UUID.test(record.id) || !Number.isSafeInteger(record.pid) || record.pid < 1 ||
@@ -282,14 +287,29 @@ export function spawnOwnedProcess(options: {
         if (closing || signal?.aborted) throw new EngineError('ABORTED', 'Process startup was cancelled.');
         if (windows) {
           // 登记前先取得 owner 的创建时间并核对命令行；取不到就不放行命令（之后无法安全恢复）。
-          let rows: WindowsProcessRow[] = [];
-          try {
-            rows = await bounded(ownerIdentity ?? windowsProcessOps.query([record.pid]), 10_000,
-              new EngineError('ENGINE_FAILED', 'Process owner identity query timed out.'));
-          } catch { /* 下方统一报错 */ }
-          const row = rows.find(item => item.pid === record.pid && item.created !== null &&
-            windowsOwnerCommandMatches(item.commandLine, process.execPath, processOwnerWrapperPath, id));
-          if (!row) throw new EngineError('ENGINE_FAILED', 'Process owner identity could not be verified.');
+          // 与 READY 并行的第一次查询可能撞上 CommandLine 尚未写入，失败后按短间隔重试到期限。
+          const deadlineAt = Date.now() + ownerIdentityDeadlineMs();
+          let pending = ownerIdentity;
+          let row: WindowsProcessRow | undefined;
+          while (!row) {
+            if (closing || signal?.aborted) throw new EngineError('ABORTED', 'Process startup was cancelled.');
+            let rows: WindowsProcessRow[] = [];
+            try {
+              rows = await bounded(pending ?? windowsProcessOps.query([record.pid]), Math.max(500, deadlineAt - Date.now()),
+                new EngineError('ENGINE_FAILED', 'Process owner identity query timed out.'));
+            } catch (error) {
+              if (error instanceof EngineError && error.message === 'Process owner identity query timed out.' && Date.now() >= deadlineAt) throw error;
+              rows = [];
+            }
+            pending = undefined;
+            row = rows.find(item => item.pid === record.pid && item.created !== null &&
+              windowsOwnerCommandMatches(item.commandLine, process.execPath, processOwnerWrapperPath, id));
+            if (row) break;
+            if (Date.now() >= deadlineAt) {
+              throw new EngineError('ENGINE_FAILED', 'Process owner identity could not be verified.');
+            }
+            await new Promise(resolve => setTimeout(resolve, 150));
+          }
           record.created = row.created!;
           if (closing || signal?.aborted) throw new EngineError('ABORTED', 'Process startup was cancelled.');
         }

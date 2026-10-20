@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { win32 } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /**
  * Windows 进程归属工具。
@@ -34,11 +35,14 @@ export function windowsPowerShellPath(env: NodeJS.ProcessEnv = process.env): str
 /** 生成查询脚本；pids 只会是正整数（调用方校验），不会拼入任何外部字符串。 */
 export function windowsProcessQueryScript(pids?: number[]): string {
   const filter = pids && pids.length ? ` -Filter "${pids.map(pid => `ProcessId=${pid}`).join(' OR ')}"` : '';
-  // 只取归属判定需要的四列，并给 CIM 一个短超时：Windows CI 上完整 Win32_Process 枚举很慢。
+  // 按 PID 查身份时必须拉完整实例：Windows PowerShell 5.1 的 Get-CimInstance -Property
+  // 会让 Win32_Process.CommandLine 变成空，归属判定就会误判失败。
+  // 全表扫描只用于结束进程树（只需 PID / PPID / 创建时间），用 -Property 减负。
+  const properties = pids?.length ? '' : ' -Property ProcessId,ParentProcessId,CreationDate -OperationTimeoutSec 15';
   return [
     "$ErrorActionPreference='Stop'",
     "$ProgressPreference='SilentlyContinue'",
-    `$rows=@(Get-CimInstance -ClassName Win32_Process${filter} -Property ProcessId,ParentProcessId,CreationDate,CommandLine -OperationTimeoutSec 5 | ForEach-Object {`,
+    `$rows=@(Get-CimInstance -ClassName Win32_Process${filter}${properties} | ForEach-Object {`,
     '  [pscustomobject]@{ p=[int64]$_.ProcessId; pp=[int64]$_.ParentProcessId;',
     "    c=$(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null }); l=$_.CommandLine } })",
     // -InputObject 保证即使只有 0/1 行也输出 JSON 数组。
@@ -69,7 +73,7 @@ export const queryWindowsProcesses: WindowsQuery = (pids) => new Promise((resolv
   if (pids?.some(pid => !Number.isSafeInteger(pid) || pid < 1)) { reject(new Error('invalid pid')); return; }
   const env = { SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT, PATH: process.env.PATH ?? '' };
   execFile(windowsPowerShellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', windowsProcessQueryScript(pids)],
-    { encoding: 'utf8', timeout: pids?.length ? 8_000 : 10_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env }, (error, stdout) => {
+    { encoding: 'utf8', timeout: pids?.length ? 15_000 : 20_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env }, (error, stdout) => {
       if (error) { reject(error); return; }
       const rows = parseWindowsProcessTable(stdout);
       if (!rows) reject(new Error('unparseable process table')); else resolve(rows);
@@ -143,6 +147,20 @@ export function quoteWindowsArg(arg: string): string {
 export function sameWindowsPath(a: string, b: string): boolean {
   const normalize = (value: string) => win32.normalize(value.replace(/^\\\\\?\\/u, '')).toLowerCase();
   return normalize(a) === normalize(b);
+}
+
+/**
+ * Node 的 ESM loader 把 `D:\file.ts` 当成协议 `d:`。
+ * `--import`、fork 入口、以及 `node file.mjs` 在 Windows 上必须用 file://。
+ * POSIX 保持原路径：tsx 对已经是 file:// 的 specifier 会再加一层前缀。
+ * 盘符转换不依赖当前 OS，这样在 Linux CI 上也能测 Windows 行为。
+ */
+export function nodeEsmSpecifier(path: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32' || path.startsWith('file:')) return path;
+  const slash = path.replace(/\\/g, '/');
+  const drive = /^([A-Za-z]:)(\/.*)?$/u.exec(slash);
+  if (drive) return `file:///${drive[1]}${(drive[2] ?? '').split('/').map(encodeURIComponent).join('/')}`;
+  return process.platform === 'win32' ? pathToFileURL(path).href : `file://${slash}`;
 }
 
 /** 当前命令行是否正是我们启动的 owner（execPath + wrapper + 唯一标记，无多余参数）。 */
