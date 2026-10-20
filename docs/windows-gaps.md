@@ -14,7 +14,9 @@ Windows CI（`windows-latest`）跑与 Ubuntu/macOS 相同的 typecheck / 全量
 | `npm` 实际是 `npm.cmd`，`shell:false` 找不到 | `packages/runtime/src/process-windows.ts`、`verification.ts` | PATH × PATHEXT 解析；npm/npx 的 `.cmd` 改为 `node <npm-cli.js>`，不经过 `cmd.exe`。 |
 | Electron 托管时 `process.execPath` 是 Electron 本体 | `packages/runtime/src/process-registry.ts`、`process-owner.mjs` | owner 设置 `ELECTRON_RUN_AS_NODE=1`；只有子进程仍是同一可执行文件时才保留该变量。 |
 | owner 启动闸门：fd 3 + `detached:true` 在 Windows 上等不到 READY | `process-registry.ts` `ownedProcessSpawnOptions`、`process-owner.mjs` | Windows 改 Node IPC（`stdio[3]='ipc'`，`serialization:'json'`），不 detach；POSIX 仍用 fd 3。子进程删除 `NODE_CHANNEL_FD`。READY 期限 Windows 15s / POSIX 3s；WMI 身份查询与 READY 并行，CommandLine 为空时重试到 15s。按 PID 查身份时不用 CIM `-Property`（否则 CommandLine 为空）；全表扫描结束进程树时才用 `-Property` 减负。 |
-| `node D:\file.ts` / `fork(D:\file.ts)` / `--import D:\tsx` 被 ESM loader 当成 `d:` 协议 | `nodeEsmSpecifier`、`engine-fake.ts`、`process-owner.mjs`、desktop / hostd 测试 | 入口与 `--import` 改 `file://` URL；owner 在 spawn 子进程前再把 Windows 模块路径转成 file://。hostd 动态 import 加 `@vite-ignore`，避免 Vite 把 `\scripts` 内联成非法转义。 |
+| `node D:\file.ts` / `--import D:\tsx` 被 ESM loader 当成 `d:` 协议 | `nodeEsmSpecifier`、`engine-fake.ts`、`process-owner.mjs`、desktop / hostd 测试 | 只把 `--import` 后的加载器改成 `file://`；Node **入口模块保持文件系统路径**（`fork(file://.ts)` 在 GitHub-hosted Windows 上会挂死、无输出）。hostd 动态 import 加 `@vite-ignore`，避免 Vite 把 `\scripts` 内联成非法转义。 |
+| Git `config --get` 在 Windows 上打印正斜杠路径 | `packages/runtime/test/workspace.test.ts` | 比较 `core.hooksPath` 时统一分隔符；生产 `sameFsPath` 已经如此。 |
+| `taskkill /F` 的退出码不是 SIGKILL | `packages/runtime/test/verification.test.ts` | Windows 上 Node 报 `exitCode: 1, signal: null`。测试按平台断言；`timedOut` / `cancelled` 标志仍是调度依据。 |
 | Git 配置 `/dev/null` | `workspace.ts` `gitNullDevice` | Windows 用 `NUL`。 |
 | fake 引擎依赖 tsx 加载 `.ts` | `packages/runtime/src/engine-fake.ts` | 打包产物优先 `engine-fake-fixture.mjs`。 |
 | doctor 把 Windows 标成不支持 | `scripts/doctor.ts` | `processManagementSupported` 含 `win32`。 |

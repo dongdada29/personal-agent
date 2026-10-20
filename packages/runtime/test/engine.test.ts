@@ -312,20 +312,26 @@ describe('stdio ACP engine adapter', () => {
 
   it.each(['allow-once', 'reject-once'])(
     'resumes only the remaining active budget after the human chooses %s', async (optionId) => {
+      // Windows taskkill after timeout is ~1s, so remaining vs a reset budget must
+      // be farther apart than the 350/180/300 POSIX numbers.
+      const windows = process.platform === 'win32';
+      const promptTimeoutMs = windows ? 3_000 : 350;
+      const activeBeforeMs = windows ? 2_200 : 180;
       const request = deferred<EnginePermission>();
-      const session = await openPermissionDeadlineFixture({ promptTimeoutMs: 350, activeBeforeMs: 180 },
+      const session = await openPermissionDeadlineFixture({ promptTimeoutMs, activeBeforeMs },
         (permission) => { request.resolve(permission); });
       let settled = false;
       const prompt = session.prompt('Read fixture').catch((error: unknown) => error)
         .finally(() => { settled = true; });
       const permission = await request.promise;
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, windows ? 500 : 400));
       expect(settled).toBe(false);
       const resumedAt = performance.now();
       await session.resolvePermission(permission.id, optionId);
       expect(await prompt).toMatchObject({ code: 'PROMPT_TIMEOUT' });
-      // A reset 350ms budget would violate this bound even before cleanup.
-      expect(performance.now() - resumedAt).toBeLessThan(300);
+      // POSIX: a reset 350ms budget would exceed 300ms even before cleanup.
+      // Windows: remaining ~800ms + ~1s cleanup stays under 2.5s; a reset 3s budget would not.
+      expect(performance.now() - resumedAt).toBeLessThan(windows ? 2_500 : 300);
       expect(processAlive(session.processId)).toBe(false);
     },
   );

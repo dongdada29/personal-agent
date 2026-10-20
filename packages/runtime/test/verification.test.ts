@@ -15,6 +15,11 @@ afterEach(async () => { vi.unstubAllEnvs(); await rm(directory, { recursive: tru
 
 const windowsSlow = process.platform === 'win32';
 
+/** taskkill /F 在 Windows 上经 TerminateProcess 退出，Node 报 exitCode 1、signal null，而不是 POSIX SIGKILL。 */
+function forcedTermination(): { exitCode: number | null; signal: NodeJS.Signals | null } {
+  return windowsSlow ? { exitCode: 1, signal: null } : { exitCode: null, signal: 'SIGKILL' };
+}
+
 async function waitForFile(path: string): Promise<string> {
   const deadline = Date.now() + (windowsSlow ? 20_000 : 3_000);
   while (Date.now() < deadline) {
@@ -84,7 +89,7 @@ describe('Runtime verification execution', () => {
     const pidFile = join(directory, 'pid');
     const start = Date.now();
     const result = await runVerification({ worktreePath: directory, command: command('require("fs").writeFileSync(process.argv[1],String(process.pid));process.on("SIGTERM",()=>{});setInterval(()=>{},1000)', [pidFile]), timeoutMs: 300 });
-    expect(result).toMatchObject({ exitCode: null, signal: 'SIGKILL', timedOut: true, cancelled: false });
+    expect(result).toMatchObject({ ...forcedTermination(), timedOut: true, cancelled: false });
     expect(Date.now() - start).toBeLessThan(windowsSlow ? 20_000 : 3_000);
     expect(alive(Number(await readFile(pidFile, 'utf8')))).toBe(false);
   });
@@ -96,7 +101,7 @@ describe('Runtime verification execution', () => {
     const pid = Number(await waitForFile(pidFile));
     expect(alive(pid)).toBe(true);
     controller.abort();
-    expect(await running).toMatchObject({ exitCode: null, cancelled: true, timedOut: false });
+    expect(await running).toMatchObject({ exitCode: forcedTermination().exitCode, cancelled: true, timedOut: false });
     expect(alive(pid)).toBe(false);
   });
 

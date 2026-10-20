@@ -186,7 +186,8 @@ describe('registered Git workspaces and task worktrees', () => {
     const controlEnv = { ...process.env, GIT_CONFIG_GLOBAL: globalPath, GIT_CONFIG_SYSTEM: gitNullDevice, GIT_CONFIG_NOSYSTEM: '1' };
     for (const [key, value] of [['core.hooksPath', hooks], ['commit.gpgSign', 'true'], ['diff.noprefix', 'true']]) {
       const { stdout } = await execute('git', ['config', '--get', key], { cwd: source, env: controlEnv });
-      expect(stdout.trim()).toBe(value);
+      // Git for Windows prints core.hooksPath with forward slashes; Node join uses backslashes.
+      expect(stdout.trim().replaceAll('\\', '/')).toBe(String(value).replaceAll('\\', '/'));
     }
     ambient.globalPath = globalPath; ambient.systemPath = systemPath;
     const { worktreePath } = await prepare('ambient-config');
