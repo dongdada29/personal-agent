@@ -88,6 +88,10 @@ describe('public session verification', () => {
     expect(verifiedSession({ mode: 'loopback', demo: 'fake', csrfToken: 'must-not-retain' }, now)).toEqual({ mode: 'loopback', demo: 'fake' });
     expect(verifiedSession({ mode: 'loopback', demo: 'claude' }, now)).toEqual({ mode: 'loopback' });
   });
+  it('keeps the desktop marker of a managed Electron session and never combines it with demo', () => {
+    expect(verifiedSession({ mode: 'loopback', desktop: true, csrfToken: 'must-not-retain' }, now)).toEqual({ mode: 'loopback', desktop: true });
+    expect(verifiedSession({ mode: 'loopback', desktop: true, demo: 'fake' }, now)).toEqual({ mode: 'loopback', demo: 'fake' });
+  });
   it('accepts a complete active paired device and whitelists metadata', () => {
     const result = verifiedSession({ ...paired, device: { ...device, sessionHash: 'server-only', anotherField: 'ignore' } }, now);
     expect(result).toEqual(paired);

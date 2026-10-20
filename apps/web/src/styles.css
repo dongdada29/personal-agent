@@ -51,6 +51,24 @@ button { -webkit-tap-highlight-color: transparent; }
 .pair-ticket { margin-top: 18px; padding: 14px; border: 1px solid #dce9fc; border-radius: 8px; background: #f5f9ff; }
 .pair-link { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-size: 12px; color: #466287; }
 .device-warning { margin-bottom: 18px; }
+.box-panel { min-width: 0; }
+.box-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.box-section-title { margin: 0 0 14px; font-size: 16px; color: #253854; }
+.box-card { margin-bottom: 16px; }
+.box-card .ant-card-head-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.box-stats { display: grid; gap: 8px; margin: 0 0 14px; }
+.box-stats div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; font-size: 12px; line-height: 1.7; }
+.box-stats dt { color: #7c8ba3; margin: 0; }
+.box-stats dd { margin: 0; color: #466287; overflow-wrap: anywhere; }
+.box-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.box-desktops { display: grid; gap: 10px; }
+.box-desktop { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px; border: 1px solid #e8eef7; border-radius: 10px; background: #fafbfe; }
+.box-meta { color: #8091ab; font-size: 11px; line-height: 1.7; }
+.box-hint { margin-bottom: 12px; }
+.box-loading { padding: 40px 0; text-align: center; color: #7a8ca6; }
+.vnc-frame { width: 100%; min-height: min(70vh, 640px); background: #111; }
+.vnc-frame canvas { max-width: 100%; display: block; margin: 0 auto; }
+.vnc-status { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 0; color: #7a8ca6; }
 .demo-label { display: flex; align-items: center; gap: 8px; flex-shrink: 0; color: #58708e; font-size: 12px; padding: 9px 12px; background: #eaf0fa; border: 1px solid #dce5f5; border-radius: 8px; }
 .demo-dot { display: inline-block; width: 6px; height: 6px; flex: 0 0 6px; background: #3c85d9; border-radius: 50%; }
 .phase-notice { margin-bottom: 24px; background: #edf4ff; border: 1px solid #dce9fc; }
@@ -230,6 +248,8 @@ footer { padding: 32px 0 28px; color: #a3aec0; font-size: 10px; text-align: cent
   .workbench { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .settings-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .device-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .box-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .box-desktop { flex-wrap: wrap; }
   .auth-shell { margin-top: 6vh; }
   .settings-grid .ant-card-body, .context-card .ant-card-body { padding: 18px; }
   .task-list-section { margin-top: 20px; }

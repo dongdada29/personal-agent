@@ -7,6 +7,12 @@ import type {
   Device,
   InstanceSettings,
   PairingTicket,
+  BoxAction,
+  BoxDeployment,
+  BoxDeploymentList,
+  BoxOperation,
+  BoxRegistrationTicket,
+  CreateCloudBoxCommand,
   Task,
   TaskControlCommand,
   TaskList,
@@ -15,6 +21,7 @@ import type {
 } from '@personal-agent/contracts';
 import { DELIVERY_STATUSES, TASK_STATUSES } from '@personal-agent/contracts';
 import { authSession, notifyAuthRequired } from './auth-session';
+import { boxErrorMessages } from './box-display';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); this.name = 'ApiError'; }
@@ -29,6 +36,7 @@ export function isTemporaryConnectionFailure(error: unknown): boolean {
 }
 
 const errorMessages: Record<string, string> = {
+  ...boxErrorMessages,
   LOCAL_ONLY: '当前实例仅接受本机访问，请使用启动终端显示的 http://127.0.0.1 工作台地址。',
   HOST_REJECTED: '当前地址与实例配置不符，请使用配置的工作台地址。',
   ORIGIN_REJECTED: '当前页面来源与实例配置不符，请从工作台原地址重新打开。',
@@ -42,6 +50,7 @@ const errorMessages: Record<string, string> = {
   REAL_TASK_INPUT: 'Claude 任务需要选择 Git 工作区，并填写验证程序和参数。',
   WORKSPACE_REQUIRED: '请先登记并选择 Git 工作区。',
   WORKSPACE_INVALID: '无法使用该工作区。请确认填写仓库根目录的绝对路径、已有 Git 提交，并且服务用户能够读取。',
+  DESKTOP_TOKEN_REQUIRED: '当前实例只接受来自其桌面客户端的请求。',
   INVALID_TASK_TRANSITION: '任务状态已变化，当前操作无法执行。请刷新任务后再选择操作。',
   STALE_ATTEMPT: '该执行或审批已结束，请刷新任务查看当前待处理项。',
   TASK_NOT_FOUND: '任务记录不存在，请刷新任务列表。',
@@ -177,5 +186,30 @@ export const api = {
   updateAgent: (id: string, command: { commandId: string; name?: string; model?: string; instructions?: string }) =>
     request<AgentProfile>(`/api/agents/${encodeURIComponent(id)}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+    }),
+  listBoxDeployments: (signal?: AbortSignal) => request<BoxDeploymentList>('/api/box/deployments', { signal }),
+  createCloudBox: (command: CreateCloudBoxCommand) =>
+    request<BoxDeployment>('/api/box/deployments', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+    }),
+  removeCloudBox: (id: string, command: { commandId: string }) =>
+    request<{ id: string; removed: true }>(`/api/box/deployments/${encodeURIComponent(id)}`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+    }),
+  boxAction: (id: string, command: { commandId: string; action: BoxAction }) =>
+    request<{ id: string; operation: BoxOperation }>(`/api/box/deployments/${encodeURIComponent(id)}/actions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+    }),
+  issueBoxTicket: (id: string, command: { commandId: string }) =>
+    request<BoxRegistrationTicket>(`/api/box/deployments/${encodeURIComponent(id)}/tickets`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+    }),
+  startBoxDesktop: (id: string, desktopId: string, command: { commandId: string }) =>
+    request<BoxDeployment>(`/api/box/deployments/${encodeURIComponent(id)}/desktops/${encodeURIComponent(desktopId)}/start`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+    }),
+  stopBoxDesktop: (id: string, desktopId: string, command: { commandId: string }) =>
+    request<BoxDeployment>(`/api/box/deployments/${encodeURIComponent(id)}/desktops/${encodeURIComponent(desktopId)}/stop`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
     }),
 };
