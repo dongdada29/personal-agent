@@ -7,6 +7,7 @@
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { tightenPrivateFile } from '@personal-agent/runtime';
 import type { BoxCloudConnection, BoxContainerState, BoxHostState, BoxMemoryPressure } from '@personal-agent/contracts';
 import { BoxError } from './host-adapter.js';
 
@@ -87,6 +88,7 @@ export class BoxStore {
   private closed = false;
   constructor(readonly filename: string, private readonly now: () => number = Date.now) {
     this.db = new DatabaseSync(filename);
+    if (filename !== ':memory:') tightenPrivateFile(filename);
     try {
       this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
         CREATE TABLE IF NOT EXISTS box_schema (version INTEGER PRIMARY KEY);

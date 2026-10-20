@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { ensurePrivateDirectory, tightenPrivateFile } from './private-fs.js';
 import {
   assertCurrentAttempt, beginTaskAttempt, transitionTask, requestTaskPause, updateTaskDelivery, TaskStateError,
   type Artifact, type CreateTaskCommand, type Task, type TaskEvent,
@@ -69,10 +69,14 @@ export class TaskStore {
 
   constructor(public readonly filename: string, options: { fakeOnly?: boolean } = {}) {
     this.fakeOnly = options.fakeOnly === true;
-    if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true });
+    if (filename !== ':memory:') {
+      ensurePrivateDirectory(dirname(filename));
+    }
     this.db = new DatabaseSync(filename);
+    if (filename !== ':memory:') tightenPrivateFile(filename);
     try {
       this.db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
+      if (filename !== ':memory:') tightenPrivateFile(filename);
       this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
       const version = Number((this.db.prepare('SELECT COALESCE(MAX(version),0) AS version FROM schema_migrations').get() as Row).version);
       if (version > migrations.at(-1)!.version) {

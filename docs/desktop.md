@@ -81,7 +81,7 @@ npm run desktop:dist
 | --- | --- | --- |
 | 1. 连接令牌 | 证明请求来自「这次启动的桌面客户端」或本机回环 | 托管模式：主进程每次启动用 `randomBytes(32)` 生成 43 字符令牌，只经 IPC 交给 `app://` 代理，注入 `Authorization: Bearer`。除 `/api/box/agent/*` 外所有请求和浏览器侧 WebSocket 升级都要校验。令牌从不进 argv / env / 日志 / 响应。连接模式没有启动令牌，走本机回环规则。CLI / `npm run dev` 也没有启动令牌，只接受 `127.0.0.1` / `localhost`。 |
 | 2. 设备配对 | 每台客户端有稳定的 Ed25519 身份，第一次出现必须批准 | 设备 ID = SHA-256(32 字节公钥)。挑战 60 秒一次性。`kind=desktop` 且带启动令牌的托管桌面自动批准为 operator（它就是这台实例的所有者）。本机回环浏览器（`kind=browser`、无启动令牌）自动批准，否则没有已信任设备能点批准。连接模式的第二台桌面、经 Tunnel / 局域网出现的设备进入 pending。已批准列表存在 SQLite `client_devices`（schema v5）。工作台「设备管理」可批准（操作员 / 只读）、拒绝、撤销。未出示设备头的本机请求仍视为隐式 operator，保证 `npm run dev` 与既有测试。 |
-| 3. 权限校验 | 只读 vs 操作，服务端按路由强制 | `observer` 只能 GET / 申请观看用桌面票；写操作、启停容器、批准设备返回 `PERMISSION_DENIED`。只读桌面的键鼠和剪贴板在服务端 `RfbViewOnlyFilter` 丢弃，不依赖前端 `viewOnly`。配对时指定 `operator` 或 `observer`。 |
+| 3. 权限校验 | 只读 vs 操作，服务端按路由强制 | `observer` 只能 GET / 申请观看用桌面票；写操作、启停容器、批准设备返回 `PERMISSION_DENIED`。`/vnc` 打开停着的桌面也不会顺便启动（`allowStart=false`）。只读桌面的键鼠和剪贴板在服务端 `RfbViewOnlyFilter` 丢弃，不依赖前端 `viewOnly`。配对时指定 `operator` 或 `observer`。 |
 | 4. 一次性桌面票 + VNC 口令 | 打开桌面必须先用已认证连接申请票；VNC 口令不离开服务端 | `POST /api/box/deployments/:id/desktops/dN/tickets` 签发 60 秒、一次性、绑定设备的票。WebSocket 用 `X-PA-Desktop-Ticket` 或子协议 `pa-dt.<ticket>` 出示。过期、已用、设备不匹配一律 `DESKTOP_TICKET_REQUIRED`。这取代了原先可复用 120 秒的网关令牌。网关令牌同样改为 60 秒且用一次即删。每个桌面的 VNC 口令由服务端随机 8 字符，只经 stdin 第二行交给 `vncpasswd -f`，存在内存和 `0600` 的 `box-vnc-secrets.json`，不进 URL / 前端 / API 响应 / 普通日志。服务端对 Xvnc 做 RFB 3.8 VncAuth，再向 noVNC 呈现 SecurityTypes None。容器内 Xvnc：`-SecurityTypes VncAuth -rfbauth`，只监听 unix socket（`-rfbport -1 -localhost`）。 |
 
 ### 时序（打开桌面）
@@ -129,7 +129,7 @@ npm run desktop:dist
 
 设备身份头：`X-PA-Device-Id`、`X-PA-Device-Session`。桌面票头：`X-PA-Desktop-Ticket` 或子协议 `pa-dt.<ticket>`。
 
-没有新的生产环境变量。`PERSONAL_AGENT_BOX`、demo、`127.0.0.1` 绑定语义不变。数据库自动迁到 schema v5（`client_devices` / `client_device_sessions`）。独立端口实弹检查：`PERSONAL_AGENT_VERIFY_PORT=47991 npm run verify:auth`（假 box，不碰 Docker / 47801 / 47811）。
+没有新的生产环境变量。`PERSONAL_AGENT_BOX`、demo、`127.0.0.1` 绑定语义不变。数据库自动迁到 schema v5（`client_devices` / `client_device_sessions`）。独立端口实弹检查：`PERSONAL_AGENT_VERIFY_PORT=47991 npm run verify:auth`（假 box，不碰 Docker / 47801 / 47811）。Linux 上对真实镜像做 VncAuth：`docker build -t personal-agent/pa-box:0.1 deploy/box && npm run verify:box-vnc`（容器名带 pid，不碰 `pa-box-desktop`）。镜像必须装 `tigervnc-tools`（提供 `/usr/bin/vncpasswd`）。服务端口令文件丢失时，操作员再次打开会轮换口令并重启该桌面。
 
 ## L0 配额与准入（M1 16GB 实测）
 

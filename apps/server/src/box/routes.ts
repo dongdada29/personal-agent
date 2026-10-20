@@ -324,6 +324,7 @@ export function installBoxRoutes(app: FastifyInstance, options: BoxRouteOptions)
     }) : undefined;
     if (!ticket) { rejectUpgrade(socket, 401, 'DESKTOP_TICKET_REQUIRED'); return; }
     const [, id, desktopId] = vnc!;
+    const control = ticket.control && authorization.role !== 'observer';
     track(socket);
     let release: (() => void) | undefined;
     let desktop: { stream: Duplex; release(): void } | undefined;
@@ -333,13 +334,13 @@ export function installBoxRoutes(app: FastifyInstance, options: BoxRouteOptions)
     socket.once('close', () => { if (desktop && !upgraded) abort(); });
     if (authorization.subscribeInvalidation) release = authorization.subscribeInvalidation(abort);
     // 先在 HTTP 层完成准入与网关握手：失败时浏览器拿到明确的 HTTP 状态码，而不是一个立即关闭的 WebSocket。
-    service.openDesktopStream(id, desktopId).then(opened => {
+    // observer 不能借这条路径把停着的桌面启动起来。
+    service.openDesktopStream(id, desktopId, { allowStart: control }).then(opened => {
       if (socket.destroyed) { opened.stream.destroy(); opened.release(); release?.(); return; }
       desktop = opened;
       track(opened.stream);
       wss.handleUpgrade(request, socket, head, ws => {
         upgraded = true;
-        const control = ticket.control && authorization.role !== 'observer';
         const start = () => {
           const bridge = bridgeWebSocket(ws, opened.stream, () => service.touchDesktop(id, desktopId), () => { release?.(); release = undefined; opened.release(); }, control);
           if (authorization.subscribeInvalidation) { release?.(); release = authorization.subscribeInvalidation(() => ws.close(1008)); }

@@ -14,3 +14,4 @@ export * from './auth-store.js';
 export * from './one-time-ticket-store.js';
 export * from './device-crypto.js';
 export * from './process-windows.js';
+export * from './private-fs.js';

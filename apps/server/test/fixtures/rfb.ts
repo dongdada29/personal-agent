@@ -1,12 +1,13 @@
 import { createServer, type AddressInfo, type Server } from 'node:net';
 import type { Duplex } from 'node:stream';
 import WebSocket from 'ws';
-import { RFB_VERSION } from '../../src/rfb-preauth.js';
+import { encryptVncChallenge, RFB_VERSION } from '../../src/rfb-preauth.js';
 
-/** 假 Xvnc：RFB 3.8 + VncAuth，不校验口令；吃掉 ClientInit 后再回显后续帧。 */
-export function attachFakeVncAuth(socket: Duplex): void {
+/** 假 Xvnc：RFB 3.8 + VncAuth。传入 password 时校验挑战应答，否则接受任意口令。 */
+export function attachFakeVncAuth(socket: Duplex, password?: string): void {
   let buffered = Buffer.alloc(0);
   let phase: 'version' | 'select' | 'response' | 'clientInit' | 'echo' = 'version';
+  const challenge = Buffer.alloc(16, 7);
   const onData = (chunk: Buffer) => {
     buffered = Buffer.concat([buffered, chunk]);
     if (phase === 'version') {
@@ -19,11 +20,17 @@ export function attachFakeVncAuth(socket: Duplex): void {
       if (buffered.length < 1) return;
       buffered = buffered.subarray(1);
       phase = 'response';
-      socket.write(Buffer.alloc(16, 7));
+      socket.write(challenge);
     }
     if (phase === 'response') {
       if (buffered.length < 16) return;
+      const response = buffered.subarray(0, 16);
       buffered = buffered.subarray(16);
+      if (password && !response.equals(encryptVncChallenge(challenge, password))) {
+        socket.write(Buffer.from([0, 0, 0, 1]));
+        socket.end();
+        return;
+      }
       phase = 'clientInit';
       socket.write(Buffer.from([0, 0, 0, 0]));
     }
@@ -42,7 +49,10 @@ export function attachFakeVncAuth(socket: Duplex): void {
   socket.on('data', onData);
 }
 
-export async function fakeVncAuthGate(tokens: Map<string, string>): Promise<{ server: Server; port: number; preambles: string[] }> {
+export async function fakeVncAuthGate(
+  tokens: Map<string, string>,
+  passwords?: Map<string, string>,
+): Promise<{ server: Server; port: number; preambles: string[] }> {
   const preambles: string[] = [];
   const server = createServer(socket => {
     let buffered = '';
@@ -58,7 +68,7 @@ export async function fakeVncAuthGate(tokens: Map<string, string>): Promise<{ se
       if (!match || tokens.get(match[1]) !== match[2]) { socket.end('ERR UNAUTHORIZED\n'); return; }
       socket.write('OK\n');
       if (rest.length) socket.unshift(rest);
-      attachFakeVncAuth(socket);
+      attachFakeVncAuth(socket, passwords?.get(match[1]));
     };
     socket.on('data', onData);
     socket.on('error', () => socket.destroy());

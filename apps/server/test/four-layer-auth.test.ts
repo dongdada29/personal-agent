@@ -14,6 +14,8 @@ class FakeAdapter implements HostAdapter {
   readonly kind = 'local' as const;
   running = new Set<string>();
   tokens = new Map<string, string>();
+  passwords = new Map<string, string>();
+  starts = 0;
   received: Buffer[] = [];
   memoryPressure: BoxMemoryPressure = 'normal';
   constructor(private readonly gatePort: () => number) {}
@@ -24,9 +26,18 @@ class FakeAdapter implements HostAdapter {
   }
   actions(): BoxAction[] { return []; }
   async perform(): Promise<void> {}
-  async desktop(op: DesktopOp, desktopId: string, token?: string): Promise<void> {
-    if (op === 'start') { this.running.add(desktopId); this.tokens.set(desktopId, token!); }
-    else this.running.delete(desktopId);
+  async desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void> {
+    if (op === 'start') {
+      const already = this.running.has(desktopId);
+      this.running.add(desktopId);
+      this.starts += 1;
+      if (token) this.tokens.set(desktopId, token);
+      // 已在运行的桌面保留原 rfbauth，和真实 pa-box-ctl 一样。
+      if (password && !already) this.passwords.set(desktopId, password);
+    } else {
+      this.running.delete(desktopId);
+      this.passwords.delete(desktopId);
+    }
   }
   openGate() {
     return new Promise<import('node:stream').Duplex>((resolve, reject) => {
@@ -42,7 +53,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) awai
 async function fixture(options: { now?: () => number; desktop?: { token: string } } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'personal-agent-four-layer-'));
   const adapter = new FakeAdapter(() => gate.port);
-  const gate = await fakeVncAuthGate(adapter.tokens);
+  const gate = await fakeVncAuthGate(adapter.tokens, adapter.passwords);
   cleanups.push(() => { rmSync(dir, { recursive: true, force: true }); });
   cleanups.push(() => new Promise<void>(resolve => gate.server.close(() => resolve())));
   const result = await buildApp({
@@ -139,6 +150,14 @@ describe('four-layer gateway auth', () => {
     expect(write.statusCode).toBe(403);
     expect(write.json().code).toBe('PERMISSION_DENIED');
 
+    const stoppedTicket = await mintDesktopTicket(app, 'd1', observer);
+    await expect(openTicketedVnc(port, 'd1', stoppedTicket, observer)).rejects.toMatchObject({ status: 403 });
+
+    expect((await app.inject({
+      method: 'POST', url: '/api/box/deployments/local/desktops/d1/start',
+      headers: json, payload: { commandId: 'operator-start' },
+    })).statusCode).toBe(200);
+
     const ticket = await mintDesktopTicket(app, 'd1', observer);
     const ticketBody = (await app.inject({
       method: 'POST', url: '/api/box/deployments/local/desktops/d1/tickets', headers: observer,
@@ -175,5 +194,33 @@ describe('four-layer gateway auth', () => {
     }
     expect(minted.json()).toMatchObject({ control: true, desktopId: 'd1' });
     expect(minted.json().ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  });
+
+  it('regenerates the VNC password and restarts when the secrets file is gone', async () => {
+    const first = await fixture();
+    expect((await first.app.inject({
+      method: 'POST', url: '/api/box/deployments/local/desktops/d1/start',
+      headers: json, payload: { commandId: 'start-d1' },
+    })).statusCode).toBe(200);
+    const old = first.adapter.passwords.get('d1');
+    expect(old).toHaveLength(8);
+    await first.app.close();
+
+    const dir = mkdtempSync(join(tmpdir(), 'personal-agent-four-layer-'));
+    cleanups.push(() => { rmSync(dir, { recursive: true, force: true }); });
+    const second = await buildApp({
+      dataDir: join(dir, 'data'), autoRun: false, webRoot: false,
+      box: { localAdapter: first.adapter, sweepIntervalMs: 0, cacheMs: 0 },
+    });
+    cleanups.push(() => second.app.close());
+    await second.app.listen({ host: '127.0.0.1', port: 0 });
+    const port = (second.app.server.address() as AddressInfo).port;
+    const ticket = await mintDesktopTicket(second.app, 'd1');
+    const ws = await openTicketedVnc(port, 'd1', ticket);
+    await completeBrowserRfbNone(ws);
+    expect(first.adapter.passwords.get('d1')).toBeDefined();
+    expect(first.adapter.passwords.get('d1')).not.toBe(old);
+    expect(first.adapter.starts).toBeGreaterThanOrEqual(2);
+    ws.close();
   });
 });

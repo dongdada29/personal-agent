@@ -15,6 +15,7 @@ class FakeAdapter implements HostAdapter {
   readonly kind = 'local' as const;
   running = new Set<string>();
   tokens = new Map<string, string>();
+  passwords = new Map<string, string>();
   ops: { op: DesktopOp; desktopId: string; tokenOnStdin: boolean; passwordOnStdin: boolean }[] = [];
   memoryPressure: BoxMemoryPressure = 'normal';
   constructor(private readonly gatePort: () => number) {}
@@ -27,8 +28,16 @@ class FakeAdapter implements HostAdapter {
   async perform(): Promise<void> {}
   async desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void> {
     this.ops.push({ op, desktopId, tokenOnStdin: !!token, passwordOnStdin: !!password });
-    if (op === 'start') { this.running.add(desktopId); this.tokens.set(desktopId, token!); }
-    else { this.running.delete(desktopId); this.tokens.delete(desktopId); }
+    if (op === 'start') {
+      const already = this.running.has(desktopId);
+      this.running.add(desktopId);
+      this.tokens.set(desktopId, token!);
+      if (password && !already) this.passwords.set(desktopId, password);
+    } else {
+      this.running.delete(desktopId);
+      this.tokens.delete(desktopId);
+      this.passwords.delete(desktopId);
+    }
   }
   openGate() {
     return new Promise<import('node:stream').Duplex>((resolve, reject) => {
@@ -44,7 +53,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) awai
 async function fixture(options: Partial<AppOptions> = {}, clock?: { now: number }) {
   const dir = mkdtempSync(join(tmpdir(), 'personal-agent-box-routes-'));
   const adapter = new FakeAdapter(() => gate.port);
-  const gate = await fakeVncAuthGate(adapter.tokens);
+  const gate = await fakeVncAuthGate(adapter.tokens, adapter.passwords);
   cleanups.push(() => { rmSync(dir, { recursive: true, force: true }); });
   cleanups.push(() => new Promise<void>(resolve => gate.server.close(() => resolve())));
   const now = clock ? () => clock.now : options.now;

@@ -24,6 +24,7 @@ class FakeAdapter implements HostAdapter {
   readonly kind = 'local' as const;
   running = new Set<string>(['d1']);
   tokens = new Map<string, string>([['d1', 'T'.repeat(43)]]);
+  passwords = new Map<string, string>();
   constructor(private readonly gatePort: () => number) {}
   async status(): Promise<BoxSnapshot> {
     return {
@@ -34,8 +35,16 @@ class FakeAdapter implements HostAdapter {
   }
   actions() { return []; }
   async perform(): Promise<void> {}
-  async desktop(op: DesktopOp, desktopId: string, token?: string): Promise<void> {
-    if (op === 'start' && token) this.tokens.set(desktopId, token);
+  async desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void> {
+    if (op === 'start') {
+      const already = this.running.has(desktopId);
+      this.running.add(desktopId);
+      if (token) this.tokens.set(desktopId, token);
+      if (password && !already) this.passwords.set(desktopId, password);
+    } else {
+      this.running.delete(desktopId);
+      this.passwords.delete(desktopId);
+    }
   }
   openGate() {
     return new Promise<import('node:stream').Duplex>((resolve, reject) => {
@@ -49,7 +58,7 @@ const dir = mkdtempSync(join(tmpdir(), 'personal-agent-verify-auth-'));
 const token = 'A'.repeat(43);
 let clock = Date.parse('2026-10-20T12:00:00Z');
 const adapter = new FakeAdapter(() => gate.port);
-const gate = await fakeVncAuthGate(adapter.tokens);
+const gate = await fakeVncAuthGate(adapter.tokens, adapter.passwords);
 const { app } = await buildApp({
   dataDir: join(dir, 'data'), autoRun: false, webRoot: false, now: () => clock,
   desktop: { token }, box: { localAdapter: adapter, sweepIntervalMs: 0, cacheMs: 0, now: () => clock },
@@ -80,13 +89,14 @@ try {
   if (bad.status !== 401) fail('token-deny', `expected 401 got ${bad.status}`);
   console.log('PASS token-deny');
 
-  const minted = await call('/api/box/deployments/local/desktops/d1/tickets', {
-    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: '{}',
-  });
-  if (minted.status !== 200) fail('ticket-mint', `expected 200 got ${minted.status}`);
-  const ticket = (await minted.json() as { ticket: string }).ticket;
-  clock += 61_000;
-  const expired = await new Promise<number>((resolve, reject) => {
+  const mint = async () => {
+    const minted = await call('/api/box/deployments/local/desktops/d1/tickets', {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: '{}',
+    });
+    if (minted.status !== 200) fail('ticket-mint', `expected 200 got ${minted.status}`);
+    return (await minted.json() as { ticket: string }).ticket;
+  };
+  const upgrade = (ticket: string) => new Promise<number>((resolve, reject) => {
     const socket = connect({ host: '127.0.0.1', port }, () => {
       socket.write([
         `GET /api/box/deployments/local/desktops/d1/vnc HTTP/1.1`,
@@ -109,6 +119,18 @@ try {
     });
     socket.once('error', reject);
   });
+
+  const fresh = await mint();
+  const usable = await upgrade(fresh);
+  if (usable !== 101) fail('ticket-usable', `expected 101 got ${usable}`);
+  console.log('PASS ticket-usable');
+  const reused = await upgrade(fresh);
+  if (reused !== 401) fail('ticket-one-use', `expected 401 got ${reused}`);
+  console.log('PASS ticket-one-use');
+
+  const expiredTicket = await mint();
+  clock += 61_000;
+  const expired = await upgrade(expiredTicket);
   if (expired !== 401) fail('ticket-expired', `expected 401 got ${expired}`);
   console.log('PASS ticket-expired');
 

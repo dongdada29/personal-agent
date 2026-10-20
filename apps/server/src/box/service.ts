@@ -9,10 +9,11 @@
  *   统计查看者，无人查看超过 idleStopMinutes 的桌面自动停止；
  * - 错误只记录固定错误码，不记录命令输出；令牌不写日志、不返回给浏览器。
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { Duplex } from 'node:stream';
+import { ensurePrivateDirectory } from '@personal-agent/runtime';
 import type {
   BoxAction, BoxDeployment, BoxDeploymentList, BoxDesktop, BoxDesktopPolicy, BoxOperation, CreateCloudBoxCommand,
 } from '@personal-agent/contracts';
@@ -20,7 +21,7 @@ import { defaultCommandRunner, type CommandRunner } from './command.js';
 import { BoxStore, type CloudDeploymentRecord } from './box-store.js';
 import { AgentBroker, CloudAgentAdapter, CloudSshAdapter } from './cloud-adapters.js';
 import { gateHandshake, newDesktopToken } from './gate.js';
-import { authenticateRfb } from '../rfb-preauth.js';
+import { authenticateRfb, RfbAuthError } from '../rfb-preauth.js';
 import { BOX_NAMES, BoxError, resolveBoxNames, type BoxNames, type BoxSnapshot, type HostAdapter } from './host-adapter.js';
 import { localAdapterFor } from './local-adapters.js';
 import { admitDesktop, desktopPolicyFromEnv } from './policy.js';
@@ -232,8 +233,13 @@ export class BoxService {
   }
 
   private persistPasswords(): void {
-    mkdirSync(dirname(this.secretsFile), { recursive: true });
+    ensurePrivateDirectory(dirname(this.secretsFile));
     writeFileSync(this.secretsFile, JSON.stringify(Object.fromEntries(this.passwords)), { mode: 0o600 });
+  }
+
+  private forgetPassword(key: string): void {
+    this.passwords.delete(key);
+    this.persistPasswords();
   }
 
   /** 8 个可打印字符：VNC DES 只用前 8 字节。从不记录、不回显。 */
@@ -247,8 +253,17 @@ export class BoxService {
   }
 
   /** 准入通过后启动（或只轮换令牌）；返回本次使用的新令牌与 VNC 口令。 */
-  private async ensureDesktop(id: string, adapter: HostAdapter, desktopId: string): Promise<{ token: string; password: string }> {
+  private async ensureDesktop(
+    id: string,
+    adapter: HostAdapter,
+    desktopId: string,
+    options: { startIfStopped?: boolean } = {},
+  ): Promise<{ token: string; password: string }> {
     const snapshot = await this.snapshot(id, adapter, true);
+    const running = snapshot.desktops.some(item => item.id === desktopId && item.running);
+    if (!running && options.startIfStopped === false) {
+      throw new BoxError('PERMISSION_DENIED', '只读设备只能观看已经在运行的桌面。', 403);
+    }
     const refusal = admitDesktop(snapshot, desktopId, this.policy);
     if (refusal) throw refusal;
     const token = newDesktopToken();
@@ -286,16 +301,37 @@ export class BoxService {
   /**
    * 打开桌面串流：准入 → 新令牌经 stdin 写入 box → 连接网关 → 令牌前导握手。
    * 返回的流之后只承载 RFB 字节；WebSocket 由路由层终结。
+   * allowStart=false（observer）：桌面没在跑就拒绝，绝不顺便启动。
    */
-  async openDesktopStream(id: string, desktopId: string): Promise<DesktopStream> {
+  async openDesktopStream(id: string, desktopId: string, options: { allowStart?: boolean } = {}): Promise<DesktopStream> {
     this.validDesktopId(desktopId);
     const { adapter } = this.adapterFor(id);
     const key = `${id}/${desktopId}`;
-    const stream = await this.exclusive(key, async () => {
-      const { token, password } = await this.ensureDesktop(id, adapter, desktopId);
+    const allowStart = options.allowStart !== false;
+    const connect = async (startIfStopped: boolean) => {
+      const { token, password } = await this.ensureDesktop(id, adapter, desktopId, { startIfStopped });
       const gate = await adapter.openGate();
-      const raw = await gateHandshake(gate, desktopId, token);
-      return authenticateRfb(raw, password);
+      try {
+        const raw = await gateHandshake(gate, desktopId, token);
+        return await authenticateRfb(raw, password);
+      } catch (error) {
+        gate.destroy();
+        throw error;
+      }
+    };
+    const stream = await this.exclusive(key, async () => {
+      try {
+        return await connect(allowStart);
+      } catch (error) {
+        // 口令文件丢失或换了数据目录后，容器里还是旧 rfbauth。操作员打开时轮换口令并重启桌面再试一次。
+        if (!(error instanceof RfbAuthError) || !allowStart) throw error;
+        this.forgetPassword(key);
+        try { await adapter.desktop('stop', desktopId); } catch { /* 停不掉也继续用新口令拉起 */ }
+        const session = this.sessions.get(key);
+        if (session) session.running = false;
+        this.cache.delete(id);
+        return connect(true);
+      }
     });
     const session = this.sessions.get(key)!;
     session.viewers += 1;

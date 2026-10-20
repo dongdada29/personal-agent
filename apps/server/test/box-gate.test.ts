@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -127,6 +127,29 @@ describe.skipIf(!python || !bash)('box image scripts', () => {
     expect(control).toMatch(/IFS= read -r -t 5 token/);
     expect(control).toMatch(/IFS= read -r -t 5 password/);
     expect(control).toMatch(/vncpasswd -f/);
+    expect(control).toMatch(/cleanup_failed_start/);
+    const dockerfile = readFileSync(join(root, 'deploy', 'box', 'Dockerfile'), 'utf8');
+    expect(dockerfile).toMatch(/tigervnc-standalone-server/);
+    expect(dockerfile).toMatch(/tigervnc-tools/);
+  });
+
+  it('removes the gate token and temp vnc files when start fails after reading stdin', () => {
+    const dir = mkdtempSync(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'pa-ctl-'));
+    mkdirSync(join(dir, 'gate'));
+    mkdirSync(join(dir, 'd1'));
+    try {
+      const result = spawnSync(bash!, ['--noprofile', '--norc', ctl, 'start', 'd1'], {
+        env: { PATH: '/usr/bin:/bin', PA_BOX_MAX_DESKTOPS: '3', PA_BOX_RUN_DIR: dir },
+        input: `${'A'.repeat(43)}\nshort\n`,
+        encoding: 'utf8',
+      });
+      expect(result.status).toBe(65);
+      expect(existsSync(join(dir, 'gate', 'd1.token'))).toBe(false);
+      expect(existsSync(join(dir, 'd1', 'vnc.passwd'))).toBe(false);
+      expect(readdirSync(join(dir, 'd1')).filter(name => name.startsWith('.vnc.'))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('no-tcp-listen.py flags a process that listens on TCP', async () => {
