@@ -1,0 +1,97 @@
+#!/bin/bash
+# pa-box-ctl：box 内的桌面控制命令，只由 server / 主机守护进程经 `docker exec -i pa-box pa-box-ctl ...` 以 root 调用。
+#
+#   pa-box-ctl status            输出一行 JSON：{"v":1,"max":3,"desktops":[{"id":"d1","running":true},...]}
+#   pa-box-ctl start dN          从 stdin 读取 43 字符令牌，写入网关令牌文件；桌面未运行则启动
+#   pa-box-ctl stop dN           停止桌面并作废令牌
+#
+# 令牌只走 stdin：容器内 bot 共享 PID 命名空间，能看到彼此的命令行（L0 问题 8），所以绝不放进 argv / env。
+#
+# 退出码：0 成功；64 参数错误；65 令牌格式错误；66 达到桌面上限；70 启动失败；71 桌面监听了 TCP（已停止）。
+set -euo pipefail
+unset BASH_ENV ENV
+umask 077
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+max="${PA_BOX_MAX_DESKTOPS:-3}"
+[[ "$max" =~ ^[1-9]$ ]] || { echo "invalid PA_BOX_MAX_DESKTOPS" >&2; exit 64; }
+
+desktop_number() {
+  local id="${1:-}"
+  [[ "$id" =~ ^d([1-9])$ ]] || { echo "invalid desktop id" >&2; exit 64; }
+  local n="${BASH_REMATCH[1]}"
+  (( n <= max )) || { echo "desktop id exceeds PA_BOX_MAX_DESKTOPS" >&2; exit 64; }
+  printf '%s' "$n"
+}
+
+is_running() { pgrep -u "bot$1" -x Xvnc >/dev/null 2>&1; }
+
+running_count() {
+  local count=0 n
+  for n in $(seq 1 "$max"); do if is_running "$n"; then count=$((count + 1)); fi; done
+  printf '%s' "$count"
+}
+
+write_token() {
+  local n="$1" token tmp
+  IFS= read -r -t 5 token || true
+  [[ "$token" =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo "invalid token" >&2; exit 65; }
+  tmp="$(mktemp "/run/pa-box/gate/.d${n}.XXXXXX")"
+  printf '%s' "$token" >"$tmp"
+  unset token
+  chown root:pa-gate "$tmp"
+  chmod 0640 "$tmp"
+  mv -f "$tmp" "/run/pa-box/gate/d${n}.token"
+}
+
+stop_desktop() {
+  local n="$1"
+  rm -f "/run/pa-box/gate/d${n}.token"
+  pkill -TERM -u "bot${n}" >/dev/null 2>&1 || true
+  for _ in $(seq 1 50); do pgrep -u "bot${n}" >/dev/null 2>&1 || break; sleep 0.2; done
+  pkill -KILL -u "bot${n}" >/dev/null 2>&1 || true
+  rm -f "/run/pa-box/d${n}/vnc.sock" "/tmp/.X11-unix/X${n}" "/tmp/.X${n}-lock"
+}
+
+start_desktop() {
+  local n="$1" user="bot$1"
+  if is_running "$n"; then write_token "$n"; return 0; fi
+  # 硬上限由镜像里的用户数决定；server 侧还会按并发策略、内存压力与预算先行拒绝。
+  if (( $(running_count) >= max )); then echo "desktop limit reached" >&2; exit 66; fi
+  write_token "$n"
+  rm -f "/run/pa-box/d${n}/vnc.sock" "/tmp/.X11-unix/X${n}" "/tmp/.X${n}-lock"
+  setsid setpriv --reuid="$user" --regid="$user" --init-groups \
+    env -i HOME="/home/${user}" USER="$user" LOGNAME="$user" SHELL=/bin/bash \
+      PATH=/usr/bin:/bin LANG=C.UTF-8 \
+      PA_BOX_DISPLAY=":${n}" PA_BOX_SOCKET="/run/pa-box/d${n}/vnc.sock" \
+    /bin/bash --noprofile --norc /usr/local/lib/pa-box/start-desktop.sh </dev/null >/dev/null 2>&1 &
+  for _ in $(seq 1 150); do
+    [ -S "/run/pa-box/d${n}/vnc.sock" ] && is_running "$n" && break
+    sleep 0.1
+  done
+  if ! [ -S "/run/pa-box/d${n}/vnc.sock" ]; then stop_desktop "$n"; echo "desktop failed to start" >&2; exit 70; fi
+  # 校验：桌面的 Xvnc 不得监听任何 TCP 端口（只允许 unix socket）。
+  local pid
+  pid="$(pgrep -u "$user" -x Xvnc | head -n 1)"
+  if ! /usr/bin/python3 -I /usr/local/lib/pa-box/no-tcp-listen.py "$pid"; then
+    stop_desktop "$n"; echo "desktop listened on TCP; stopped" >&2; exit 71
+  fi
+}
+
+status() {
+  local n first=1
+  printf '{"v":1,"max":%s,"desktops":[' "$max"
+  for n in $(seq 1 "$max"); do
+    if (( first )); then first=0; else printf ','; fi
+    if is_running "$n"; then printf '{"id":"d%s","running":true}' "$n"; else printf '{"id":"d%s","running":false}' "$n"; fi
+  done
+  printf ']}\n'
+}
+
+# 编号必须先单独赋值：命令替换里的 exit 只退出子 shell，赋值失败才会触发 set -e 让整个脚本退出。
+case "${1:-}" in
+  status) status ;;
+  start) n="$(desktop_number "${2:-}")"; start_desktop "$n" ;;
+  stop) n="$(desktop_number "${2:-}")"; stop_desktop "$n" ;;
+  *) echo "usage: pa-box-ctl status | start dN | stop dN" >&2; exit 64 ;;
+esac
