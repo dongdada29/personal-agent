@@ -503,6 +503,149 @@ export interface AuthSession {
   csrfToken?: string;
   /** Present only on a server-enforced fake-only demo instance. */
   demo?: 'fake';
+  /**
+   * Present only when the server runs as the Electron client's managed child
+   * (per-launch token mode). The token itself is never exposed to the renderer.
+   */
+  desktop?: true;
+}
+
+// ---------------------------------------------------------------------------
+// Linux 云电脑 / 远程电脑（Box）
+// ---------------------------------------------------------------------------
+
+/** local = 本机宿主适配层（Colima / WSL2 / Podman）；cloud = 远端 Linux 服务器。 */
+export type BoxDeploymentKind = 'local' | 'cloud';
+/** 宿主适配器标识。fake 只在 demo 实例出现。 */
+export type BoxAdapterId = 'colima' | 'wsl2' | 'podman' | 'docker' | 'cloud-agent' | 'cloud-ssh' | 'fake';
+/** 云端主机的连接方式：agent = 主机守护进程主动外连；ssh = server 经用户 ssh 配置访问。 */
+export type BoxCloudConnection = 'agent' | 'ssh';
+export type BoxHostState =
+  | 'not_installed' | 'not_configured' | 'stopped' | 'starting' | 'running'
+  | 'pending_registration' | 'offline' | 'not_implemented' | 'error' | 'unknown';
+export type BoxContainerState = 'running' | 'stopped' | 'missing' | 'unknown' | 'not_implemented';
+export type BoxAction = 'start_vm' | 'stop_vm' | 'start_container' | 'stop_container';
+
+export interface BoxResources {
+  cpus?: number;
+  memoryBytes?: number;
+  diskBytes?: number;
+}
+
+/** 宿主 / VM 层状态。detail 与 installHint 只含固定说明文本，不含命令输出。 */
+export interface BoxHostStatus {
+  state: BoxHostState;
+  detail?: string;
+  installHint?: string;
+  version?: string;
+  runtime?: string;
+  arch?: string;
+  profile?: string;
+  resources?: BoxResources;
+}
+
+export interface BoxContainerStatus {
+  state: BoxContainerState;
+  name: string;
+  image?: string;
+  statusText?: string;
+  cpuPercent?: number;
+  memoryUsedBytes?: number;
+  memoryLimitBytes?: number;
+  detail?: string;
+}
+
+export interface BoxDesktop {
+  id: string;
+  label: string;
+  display?: string;
+  state: 'running' | 'stopped';
+  /**
+   * 桌面可以经 server 的鉴权代理打开：容器在运行、box 网关端口只绑定 127.0.0.1
+   * 且通过了安全校验。桌面本身从不监听 TCP，只能经网关 + 每桌面令牌访问。
+   */
+  streamable: boolean;
+  /** 当前经 server 代理连着的查看者数量（只统计本 server 的连接）。 */
+  viewers?: number;
+  /** 无人查看时预计自动停止的时间（空闲停机）。 */
+  idleStopAt?: string;
+}
+
+/**
+ * 宿主内存压力（macOS 取 kern.memorystatus_vm_pressure_level，Linux 取 /proc/pressure/memory）。
+ * warn 及以上时拒绝启动新桌面。unknown 表示该宿主无法测量，只按容器内存预算判断。
+ */
+export type BoxMemoryPressure = 'normal' | 'warn' | 'critical' | 'unknown';
+
+/** 桌面并发策略（来自 M1 16GB 的 L0 实测：每桌面按 0.7GB 规划，默认 2 个并发、硬上限 3 个）。 */
+export interface BoxDesktopPolicy {
+  /** 同时运行的桌面数上限（默认 2，可配置为 1..max）。 */
+  concurrent: number;
+  /** 镜像里预置的桌面用户数，也是硬上限（3）。 */
+  max: number;
+  /** 规划用的每桌面内存预算。 */
+  budgetBytesPerDesktop: number;
+  /** 无人查看多少分钟后自动停止桌面。 */
+  idleStopMinutes: number;
+}
+
+export type BoxDesktopAction = 'start' | 'stop';
+
+export interface BoxOperation {
+  action: BoxAction;
+  startedAt: string;
+  finishedAt?: string;
+  ok?: boolean;
+  /** 固定错误码，不含命令输出。 */
+  errorCode?: string;
+}
+
+export interface BoxDeployment {
+  id: string;
+  kind: BoxDeploymentKind;
+  adapter: BoxAdapterId;
+  name: string;
+  /** 云端：用户填写的服务商标签，例如 "Hetzner CAX21"；只用于展示。 */
+  providerLabel?: string;
+  /** 云端 ssh：ssh 配置中的 Host 别名；agent：可选的展示用地址。 */
+  endpoint?: string;
+  /** 凭据引用（例如 ssh-config:pa-box），从不保存凭据本身。 */
+  authRef?: string;
+  connection?: BoxCloudConnection;
+  createdAt?: string;
+  registered?: boolean;
+  lastHeartbeatAt?: string | null;
+  host: BoxHostStatus;
+  container: BoxContainerStatus;
+  desktops: BoxDesktop[];
+  desktopPolicy: BoxDesktopPolicy;
+  memoryPressure: BoxMemoryPressure;
+  actions: BoxAction[];
+  operation?: BoxOperation;
+  checkedAt: string;
+  /** demo 实例返回的 fake 部署。 */
+  fake?: true;
+}
+
+export interface BoxDeploymentList {
+  platform: string;
+  deployments: BoxDeployment[];
+}
+
+export interface CreateCloudBoxCommand {
+  commandId: string;
+  name: string;
+  providerLabel?: string;
+  connection: BoxCloudConnection;
+  endpoint?: string;
+  authRef?: string;
+}
+
+/** 一次性注册票据；明文只在签发时返回一次。 */
+export interface BoxRegistrationTicket {
+  deploymentId: string;
+  ticket: string;
+  expiresAt: string;
 }
 
 /** The plaintext ticket is returned only by its initial issuance. */

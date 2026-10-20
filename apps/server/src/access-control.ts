@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { AuthSecurityConfig, Device } from '@personal-agent/contracts';
 import type { AuthStore } from '@personal-agent/runtime';
@@ -75,13 +76,57 @@ export interface AccessControlOptions {
   demoPublicOrigin?: string;
   /** 在 /api/session 中声明 fake-only 演示，前端据此只展示 fake（服务端仍独立强制）。 */
   fakeOnlyDemo?: boolean;
+  /**
+   * Electron 托管模式的每次启动令牌（43 位 base64url）。设置后，除 box 主机守护进程
+   * 的专用路径外，每个请求都必须携带 `Authorization: Bearer <token>`，同时仍保留
+   * loopback Host/Origin 校验。令牌只经 IPC 传入，从不出现在日志、事件或响应里。
+   * 与 paired 策略、demo 互斥。
+   */
+  desktopToken?: string;
 }
+
+/** 桌面令牌与配对 Cookie 使用相同的 32 字节 base64url 形状。 */
+export const DESKTOP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * box 主机守护进程（cloud host daemon）使用的路径：它们由一次性注册票据或
+ * machine 凭据在路由内鉴权，不使用浏览器 Cookie / CSRF / 桌面令牌。
+ */
+export function isBoxAgentPath(path: string): boolean {
+  return /^\/api\/box\/agent\/(?:register|heartbeat|poll|tunnel\/[A-Za-z0-9_-]{1,64})$/.test(path);
+}
+
+/** 只接受唯一一个 `Authorization: Bearer <token>`，重复或畸形头一律失败。 */
+export function bearerToken(rawHeaders: string[]): string | undefined {
+  const values = rawHeaders.filter((_, index) => index % 2 === 1 && rawHeaders[index - 1].toLowerCase() === 'authorization');
+  if (values.length !== 1) return undefined;
+  const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(values[0]);
+  return match?.[1];
+}
+
+/** WebSocket / 隧道 upgrade 请求的鉴权结果；拒绝时只返回固定错误码。 */
+export type UpgradeAuthorization =
+  | { ok: true; subscribeInvalidation?: (close: () => void) => () => void }
+  | { ok: false; status: number; code: string };
 
 export function installAccessControl(app: FastifyInstance, store: AuthStore, port: number, proposed?: AuthSecurityConfig, options: AccessControlOptions = {}) {
   if (proposed) store.enforcePolicy(validateSecurityConfig(proposed));
   const config = store.policy();
   if (config) validateSecurityConfig(config);
   if (config && options.demoPublicOrigin) throw Object.assign(new Error('A public demo origin cannot be combined with paired access'), { code: 'DEMO_CONFIG_INVALID' });
+  const desktopToken = options.desktopToken;
+  if (desktopToken !== undefined) {
+    // 桌面令牌模式只在“本机托管子进程”下成立：不能与 paired 策略或公开 demo 叠加，
+    // 否则会出现两套互相绕过的鉴权语义。
+    if (!DESKTOP_TOKEN_PATTERN.test(desktopToken)) throw Object.assign(new Error('Desktop token is invalid'), { code: 'DESKTOP_CONFIG_INVALID' });
+    if (config || options.demoPublicOrigin || options.fakeOnlyDemo) {
+      throw Object.assign(new Error('Desktop token mode cannot be combined with paired access or demo mode'), { code: 'DESKTOP_CONFIG_INVALID' });
+    }
+  }
+  const desktopTokenValid = (rawHeaders: string[]) => {
+    const candidate = bearerToken(rawHeaders);
+    return candidate !== undefined && desktopToken !== undefined && constantEqual(candidate, desktopToken);
+  };
   const demoOrigin = options.demoPublicOrigin ? new URL(options.demoPublicOrigin) : undefined;
   const publicOrigin = config ? new URL(config.publicOrigin) : undefined;
   const cookieName = publicOrigin?.protocol === 'https:' ? '__Host-pa-device' : 'pa-device-dev';
@@ -114,6 +159,27 @@ export function installAccessControl(app: FastifyInstance, store: AuthStore, por
       }
       if (!['127.0.0.1', 'localhost'].includes(request.hostname)) return reply.code(403).send({ code: 'LOCAL_ONLY', message: 'Local development accepts loopback hosts only' });
       if (origin && !loopbackOrigins.has(origin)) return reply.code(403).send({ code: 'ORIGIN_REJECTED', message: 'Origin is not allowed' });
+      if (desktopToken !== undefined) {
+        reply.headers(securityHeaders);
+        const path = request.url.split('?', 1)[0];
+        // 主机守护进程路径由票据 / machine 凭据在路由内鉴权；其余请求一律要求本次启动的令牌。
+        if (isBoxAgentPath(path)) return;
+        if (!desktopTokenValid(request.raw.rawHeaders)) {
+          return reply.code(401).send({ code: 'DESKTOP_TOKEN_REQUIRED', message: 'This instance only accepts requests from its desktop client' });
+        }
+      }
+      return;
+    }
+    if (isBoxAgentPath(request.url.split('?', 1)[0])) {
+      // paired 实例上的主机守护进程：仍要求精确 Host，但它不是浏览器，不带 Origin，
+      // 也不持有设备 Cookie；票据 / machine 凭据由路由校验。带 Origin 的请求一律拒绝，
+      // 防止网页借用这些路径。
+      reply.headers(securityHeaders);
+      const host = singleHost(request);
+      if (host === undefined || !constantEqual(host.toLowerCase(), publicOrigin!.host.toLowerCase())) {
+        return reply.code(403).send({ code: 'HOST_REJECTED', message: 'Host is not allowed' });
+      }
+      if (origin !== undefined) return reply.code(403).send({ code: 'ORIGIN_REJECTED', message: 'Browsers cannot use box agent endpoints' });
       return;
     }
     reply.headers(securityHeaders);
@@ -177,7 +243,7 @@ export function installAccessControl(app: FastifyInstance, store: AuthStore, por
   });
 
   app.get('/api/session', async (request, reply) => {
-    if (!config) return options.fakeOnlyDemo ? { mode: 'loopback', demo: 'fake' } : { mode: 'loopback' };
+    if (!config) return options.fakeOnlyDemo ? { mode: 'loopback', demo: 'fake' } : desktopToken !== undefined ? { mode: 'loopback', desktop: true } : { mode: 'loopback' };
     const identity = identities.get(request);
     if (!identity) return reply.code(401).send({ code: 'AUTH_REQUIRED', message: 'Pair this browser to continue' });
     return { mode: 'paired', device: identity.device, csrfToken: identity.csrfToken };
@@ -212,8 +278,41 @@ export function installAccessControl(app: FastifyInstance, store: AuthStore, por
     return result;
   });
 
+  /**
+   * Fastify 的 onRequest 钩子不会处理 HTTP upgrade（WebSocket / 隧道），所以这里
+   * 按与普通请求相同的规则单独校验：demo 一律拒绝；paired 要求精确 Host、精确
+   * Origin 和有效设备 Cookie（撤销设备会立即断开）；桌面令牌模式要求令牌；
+   * 本机模式要求 loopback Host 与 loopback Origin（若带 Origin）。
+   */
+  function authorizeUpgrade(request: IncomingMessage, kind: 'browser' | 'agent'): UpgradeAuthorization {
+    if (options.fakeOnlyDemo || demoOrigin) return { ok: false, status: 403, code: 'DEMO_FAKE_ONLY' };
+    const rawHeaders = request.rawHeaders;
+    const hosts = rawHeaders.filter((_, index) => index % 2 === 0 && rawHeaders[index].toLowerCase() === 'host');
+    const host = hosts.length === 1 && typeof request.headers.host === 'string' ? request.headers.host : undefined;
+    const origin = request.headers.origin;
+    if (host === undefined) return { ok: false, status: 403, code: 'HOST_REJECTED' };
+    if (config) {
+      if (!constantEqual(host.toLowerCase(), publicOrigin!.host.toLowerCase())) return { ok: false, status: 403, code: 'HOST_REJECTED' };
+      if (kind === 'agent') return origin === undefined ? { ok: true } : { ok: false, status: 403, code: 'ORIGIN_REJECTED' };
+      if (typeof origin !== 'string' || !constantEqual(origin, config.publicOrigin)) return { ok: false, status: 403, code: 'ORIGIN_REJECTED' };
+      const token = readSessionCookie(request.headers.cookie, cookieName);
+      const identity = token ? store.authenticate(token) : null;
+      if (!token || !identity) return { ok: false, status: 401, code: 'AUTH_REQUIRED' };
+      return { ok: true, subscribeInvalidation: close => store.subscribeInvalidation(id => { if (id === identity.device.id) close(); }) };
+    }
+    let hostname: string;
+    try { hostname = new URL(`http://${host}`).hostname; }
+    catch { return { ok: false, status: 403, code: 'HOST_REJECTED' }; }
+    if (!['127.0.0.1', 'localhost'].includes(hostname)) return { ok: false, status: 403, code: 'LOCAL_ONLY' };
+    if (origin !== undefined && !loopbackOrigins.has(origin)) return { ok: false, status: 403, code: 'ORIGIN_REJECTED' };
+    if (desktopToken !== undefined && kind === 'browser' && !desktopTokenValid(rawHeaders)) return { ok: false, status: 401, code: 'DESKTOP_TOKEN_REQUIRED' };
+    return { ok: true };
+  }
+
   return {
     config,
+    desktop: desktopToken !== undefined,
+    authorizeUpgrade,
     requireActive,
     streamAuthorization(request: FastifyRequest): StreamAuthorization | undefined {
       if (!config) return undefined;

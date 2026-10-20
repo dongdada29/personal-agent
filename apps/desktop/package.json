@@ -1,0 +1,29 @@
+{
+  "name": "@personal-agent/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal Agent Electron desktop client (managed and connect modes).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs && electron .",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dist": "node scripts/build.mjs && electron-builder --config electron-builder.yml --publish never",
+    "dist:mac": "node scripts/build.mjs && electron-builder --config electron-builder.yml --mac --publish never",
+    "dist:win": "node scripts/build.mjs && electron-builder --config electron-builder.yml --win --publish never",
+    "dist:linux": "node scripts/build.mjs && electron-builder --config electron-builder.yml --linux --publish never",
+    "dist:dir": "node scripts/build.mjs && electron-builder --config electron-builder.yml --dir --publish never"
+  },
+  "dependencies": {
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1",
+    "electron": "44.9.1",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.25.11"
+  }
+}

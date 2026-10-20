@@ -8,6 +8,8 @@ import { acquireInstanceLock } from './instance-lock.js';
 import { createTaskEventStream } from './sse.js';
 import { installAccessControl, validateSecurityConfig } from './access-control.js';
 import { validateDemoConfig, type DemoModeInput } from './demo-mode.js';
+import { BoxService, type BoxServiceOptions } from './box/service.js';
+import { installBoxRoutes } from './box/routes.js';
 
 export interface AppOptions {
   dataDir: string;
@@ -16,10 +18,19 @@ export interface AppOptions {
   /** 在 demo 模式下被忽略：fake-only 实例从不持有真实 adapter。 */
   realAdapter?: EngineAdapter;
   port?: number;
-  webRoot?: string;
+  /** false 表示不托管静态页面（Electron 客户端由主进程自己提供 web 构建）。 */
+  webRoot?: string | false;
   security?: AuthSecurityConfig;
   /** 公开 fake-only 演示；与 paired security 互斥，只应由 scripts/demo.ts 设置。 */
   demo?: DemoModeInput;
+  /**
+   * Electron 托管模式：每次启动随机生成的 43 字符令牌，只经 IPC 传入、从不写日志。
+   * 启用后所有 /api 请求（除主机守护进程接口）都必须携带 `Authorization: Bearer <token>`；
+   * 与 paired security、demo 互斥（由 installAccessControl 校验）。
+   */
+  desktop?: { token: string };
+  /** Linux 云电脑（box）服务的覆盖项（测试注入假的适配器 / runner）；false 表示不启用。demo 实例始终不启用真实 box。 */
+  box?: Partial<Omit<BoxServiceOptions, 'dataDir'>> | false;
 }
 
 const demoFakeOnly = (message: string) => ({ code: 'DEMO_FAKE_ONLY', message });
@@ -44,6 +55,7 @@ export async function buildApp(options: AppOptions) {
   } catch (error) { authStore?.close(); store?.close(); releaseLock(); throw error; }
   let initializingRunner: TaskRunner | undefined;
   let initializingApp: ReturnType<typeof Fastify> | undefined;
+  let initializingBox: BoxService | undefined;
   let recoveryConfirmed = false;
   try {
     if (store.list().some(task => ['running', 'waiting_human'].includes(task.status) && !task.configSnapshot &&
@@ -66,12 +78,18 @@ export async function buildApp(options: AppOptions) {
     const app = Fastify({ logger: false, trustProxy: false, bodyLimit: 32_768,
       ajv: { customOptions: { coerceTypes: false, removeAdditional: false } } });
     initializingApp = app;
+    // demo 实例结构上不构造 BoxService：没有任何真实适配器、命令执行或桌面代理能力。
+    const box = demo || options.box === false ? undefined : new BoxService({ dataDir: options.dataDir, ...(options.box ?? {}) });
+    initializingBox = box;
     app.addHook('onClose', async () => {
+      try { box?.close(); } catch { /* box.sqlite 关闭失败不影响任务库的关闭 */ }
       try { await runner.close(); }
       finally { try { authStore.close(); store.close(); } finally { if (!runner.isBlocked) releaseLock(); } }
     });
     const port = options.port ?? 47801;
-    const access = installAccessControl(app, authStore, port, undefined, { demoPublicOrigin: demo?.publicOrigin, fakeOnlyDemo: demo !== undefined });
+    const access = installAccessControl(app, authStore, port, undefined, { demoPublicOrigin: demo?.publicOrigin, fakeOnlyDemo: demo !== undefined,
+      ...(options.desktop ? { desktopToken: options.desktop.token } : {}) });
+    installBoxRoutes(app, { service: box, demo: demo !== undefined, authorizeUpgrade: access.authorizeUpgrade, requireActive: access.requireActive });
     if (demo) {
       // 隧道后的访客都表现为 loopback 客户端，无法可靠区分来源，所以按实例全局限速；
       // 按访客限速请在 Cloudflare 侧配置。该 hook 在访问控制之后注册，只统计已放行的写请求。
@@ -241,8 +259,8 @@ export async function buildApp(options: AppOptions) {
     app.patch<{ Params: { id: string }; Body: { commandId: string; name?: string; model?: string; instructions?: string } }>('/api/agents/:id', {
       schema: { body: { type: 'object', additionalProperties: false, required: ['commandId'], minProperties: 2, properties: profileFields } },
     }, async request => store.saveProfile(request.body, request.params.id));
-    const webRoot = options.webRoot ?? resolve('apps/web/dist');
-    if (existsSync(webRoot)) {
+    const webRoot = options.webRoot === false ? undefined : options.webRoot ?? resolve('apps/web/dist');
+    if (webRoot && existsSync(webRoot)) {
       const actualRoot = realpathSync(webRoot);
       await app.register(fastifyStatic, { root: actualRoot, dotfiles: 'deny', ...(access.config ? { cacheControl: false } : {}), allowedPath: pathname => {
         try {
@@ -254,10 +272,11 @@ export async function buildApp(options: AppOptions) {
       app.get('/pair', async (_request, reply) => reply.sendFile('index.html'));
     }
     if (options.autoRun !== false) for (const task of store.list()) if (task.status === 'queued') runner.enqueue(task.id);
-    return { app, store, authStore, runner };
+    return { app, store, authStore, runner, box };
   } catch (error) {
     // An unsuccessful startup must not retain ownership of an unused data directory.
     try { await initializingApp?.close(); } catch { /* original startup error is authoritative */ }
+    try { initializingBox?.close(); } catch { /* onClose may already have closed it */ }
     try { await initializingRunner?.close(); } catch { /* cleanup confirmation controls the lock below */ }
     try { store.close(); } catch { /* onClose may already have closed it */ }
     try { authStore.close(); } catch { /* onClose may already have closed it */ }
