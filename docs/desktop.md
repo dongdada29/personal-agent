@@ -2,7 +2,7 @@
 
 Personal Agent 的 Electron 客户端（`apps/desktop`）和 Linux 云电脑（box）配套使用：本机或云端跑一个加固的 Linux 桌面容器，工作台经鉴权代理打开桌面，渲染进程永远看不到服务端口或启动令牌。
 
-公开 demo 仍然是结构上的 fake-only：不构造 BoxService、不执行命令、不能打开桌面。
+公开 demo 仍然是结构上的 fake-only：不构造 BoxService、不执行命令、不能打开桌面。CLI / `npm run dev` 默认也不启用 box；桌面客户端托管模式默认启用（可用 `PERSONAL_AGENT_BOX=0` 关掉）。
 
 ## 在 Mac 上运行
 
@@ -66,7 +66,7 @@ npm run desktop:dist
 
 | 模式 | 行为 |
 | --- | --- |
-| 托管（默认） | 主进程用 Electron 自带 Node（`ELECTRON_RUN_AS_NODE=1`）fork 打包后的 server；令牌只经 IPC 下发，不进 argv / env / 日志。server 只绑定 `127.0.0.1` 的随机端口，监听后再断言地址。渲染进程只加载 `app://personal-agent/`，`/api`（含 SSE）由主进程同源代理并注入 `Authorization: Bearer <token>`。 |
+| 托管（默认） | 主进程用 Electron 自带 Node（`ELECTRON_RUN_AS_NODE=1`）fork 打包后的 server；令牌只经 IPC 下发，不进 argv / env / 日志。server 只绑定 `127.0.0.1` 的随机端口，监听后再断言地址。数据目录默认 Electron `userData`（不是 `~/.personal-agent`）。渲染进程只加载 `app://personal-agent/`，`/api`（含 SSE）由主进程同源代理并注入 `Authorization: Bearer <token>`。 |
 | 连接 | 不启动新 server，探测本机已有的 loopback 实例（默认 `http://127.0.0.1:47801`）。只接受 loopback 访问模式；paired 实例请用浏览器打开其 HTTPS 地址。属于另一个桌面客户端的实例（需要它的启动令牌）会被拒绝。 |
 
 退出时先向 server 发 `shutdown`，等它关掉任务进程、数据库和实例锁后再结束。超时则强制结束 owner，下次启动由进程账本核实身份后清理。
@@ -90,13 +90,39 @@ npm run desktop:dist
 
 浏览器或桌面客户端 → server（终结 WebSocket，子协议 `binary`）→ 宿主 `127.0.0.1:47830`（或 `ssh -W` / 主机守护进程反连隧道）→ 容器内 `pa-box-gate`（`:6080`）→ 每桌面 unix socket `/run/pa-box/dN/vnc.sock`。
 
-- 每次打开生成 32 字节 base64url 令牌，经 `docker exec -i pa-box /usr/local/sbin/pa-box-ctl start dN` 的 **stdin** 下发（同 PID 命名空间里的其它 bot 看不到 argv）。
-- 网关只接受 120 秒内写入的令牌；同一桌面的打开串行执行。
+- 每次打开生成 32 字节 base64url 令牌，经 `docker exec -i <容器名> /usr/local/sbin/pa-box-ctl start dN` 的 **stdin** 下发（同 PID 命名空间里的其它 bot 看不到 argv）。本地容器名默认 `pa-box-desktop`（`PA_BOX_CONTAINER` 可改），避免与本机已有的 `pa-box` 容器冲突。
+- 网关只接受 **120 秒内写入的令牌**；同一令牌在该窗口内**可重复使用**（不是一次性）。再次打开桌面会轮换新令牌。同一桌面的打开串行执行。
 - Xvnc：`-rfbport -1 -localhost -rfbunixpath -rfbunixmode 0660 -SecurityTypes None`，外加 X11 MIT cookie。容器里没有 websockify。
 - Chromium **从不**加 `--no-sandbox`。seccomp 基于 moby 默认 profile，额外放行 `clone` / `setns` / `unshare`；同时 `no-new-privileges`。
 - 创建后的安全校验失败（特权、额外 cap、非回环端口、缺少 seccomp 等）会 `docker rm -f` 并报 `BOX_CONTAINER_UNSAFE`。
 
 镜像与 rootfs 在 `deploy/box/`。seccomp 生成器：`node scripts/box/gen-seccomp.mjs`。
+
+## 启用 box（默认关闭）
+
+CLI / `npm run dev` **默认不创建 BoxService、不挂载 `/api/box/*`**（包括主机守护进程的 `register` / `heartbeat` / `poll` 与隧道）。需要本机或云端云电脑时：
+
+```sh
+PERSONAL_AGENT_BOX=1 npm run dev
+```
+
+桌面客户端托管模式默认开启 box（可用 `PERSONAL_AGENT_BOX=0` 关闭）。显式传入 `box: { ... }` 的测试同样开启。
+
+### `/api/box/agent/*` 经隧道的公网暴露风险
+
+这些路径**不用**浏览器 Cookie、CSRF 或桌面启动令牌，只靠一次性注册票据和 machine 凭据。若把 paired 实例经 Cloudflare Tunnel / Tailscale funnel / 其它反向代理公开，同时又开了 box，则公网可以打到：
+
+- `POST /api/box/agent/register`
+- `POST /api/box/agent/heartbeat`
+- `POST /api/box/agent/poll`
+- `Upgrade: pa-box-tunnel`（`/api/box/agent/tunnel/:streamId`）
+
+票据或凭据一旦泄露，攻击者可以注册进该部署、领取启停命令、把网关隧道接到自己这边。默认关闭 box 时这些路由根本不存在。开启 box 的 paired 入口请只放在受信网络（例如私有 Tailscale），不要暴露到未加额外访问控制的公网。
+
+### 数据目录与容器名
+
+- 桌面托管模式的数据目录默认是 Electron `userData`（macOS `~/Library/Application Support/Personal Agent`，Windows `%APPDATA%/Personal Agent`），**不再**使用 `~/.personal-agent`，以免与正在运行的 `npm run dev` 抢 `INSTANCE_LOCKED`。可用设置里的 `dataDir` 或 `PERSONAL_AGENT_DATA_DIR` 覆盖。
+- 本地 Docker 容器名默认 `pa-box-desktop`（环境变量 `PA_BOX_CONTAINER` / hostd.json 的 `container`）。Colima profile 与 docker context 仍叫 `pa-box` / `colima-pa-box`。
 
 ## 云端主机
 
@@ -112,7 +138,7 @@ sudo bash --noprofile --norc scripts/box/install-cloud-host.sh \
 sudo rm -f /root/pa-box.ticket
 ```
 
-安装脚本安装 docker 或 rootless podman、box 镜像、seccomp、Node 22、systemd 单元 `pa-box-hostd`；守护进程只监听本机、用票据注册后改用 machine 凭据心跳。`--server` 必须是 **https**。本机 loopback 或 `app://` 桌面客户端无法让云主机回连，请改用 SSH，或先配置 paired 的 HTTPS 入口。
+安装脚本安装 docker 或 rootless podman、box 镜像、seccomp、Node 22、systemd 单元 `pa-box-hostd`；守护进程只监听本机、用票据注册后改用 machine 凭据心跳。`--server` 必须是 **https**。本机 loopback 或 `app://` 桌面客户端无法让云主机回连，请改用 SSH，或先配置 paired 的 HTTPS 入口。hostd.json 可用 `"container"` 覆盖容器名（默认 `pa-box-desktop`）。
 
 Cloudflare 可能不转发非 WebSocket 的 `pa-box-tunnel` 升级，生产更稳妥的是 Tailscale 或 SSH。
 

@@ -3,7 +3,8 @@
  *
  * 协议：连接后发送一行 `PA-BOX-GATE 1 <desktopId> <token>\n`，网关回复 `OK\n`（之后是原始 RFB 字节）
  * 或 `ERR <CODE>\n` 并关闭。令牌是每次打开桌面时新生成的 32 字节随机值，经 stdin 交给
- * pa-box-ctl，网关只接受 120 秒内写入的令牌。令牌从不写日志、不返回给浏览器。
+ * pa-box-ctl，网关只接受 120 秒内写入的令牌（窗口内可重复使用，不是一次性）。
+ * 再次打开桌面会轮换新令牌。令牌从不写日志、不返回给浏览器。
  */
 import { randomBytes } from 'node:crypto';
 import type { Duplex } from 'node:stream';

@@ -10,14 +10,15 @@
  *   POST   /api/box/deployments/:id/desktops/:d/start  启动桌面（并发上限 / 内存压力 / 预算准入）
  *   POST   /api/box/deployments/:id/desktops/:d/stop   停止桌面
  *   UPGRADE /api/box/deployments/:id/desktops/:d/vnc  noVNC 的 WebSocket：server 鉴权并终结 WebSocket，
- *          再经 box 网关（每桌面一次性令牌）连到桌面的 unix socket，桌面从不直接暴露
+ *          再经 box 网关（每桌面 120 秒内可重复使用的令牌）连到桌面的 unix socket，桌面从不直接暴露
  *
  * 主机守护进程侧（不使用 Cookie / CSRF / 桌面令牌，由票据或 machine 凭据鉴权）：
  *   POST   /api/box/agent/register | heartbeat | poll
  *   UPGRADE /api/box/agent/tunnel/:streamId           反向隧道（Upgrade: pa-box-tunnel）
+ *   这些路径在 box 关闭时不会挂载。若 paired 实例经隧道公开，它们会暴露在公网，只靠票据/凭据保护。
  *
  * demo 实例：只有 GET 返回 fake 数据；所有写接口与 upgrade 一律 403 DEMO_FAKE_ONLY，
- * 检查放在已路由的 handler 内（与 /api/tasks 一致），编码路径变体同样会被拦截。
+ * 检查放在已路由的 handler 内（与 /api/tasks 一致），编码路径变体同样会被拦截。agent 端点不挂载。
  */
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -34,6 +35,8 @@ export interface BoxRouteOptions {
   /** demo 实例传 undefined：结构上不存在真实适配器。 */
   service: BoxService | undefined;
   demo: boolean;
+  /** false 时不挂载 /api/box/agent/*（含隧道）。关闭 box 或 demo 时应为 false。 */
+  agentRoutes?: boolean;
   authorizeUpgrade(request: IncomingMessage, kind: 'browser' | 'agent'): UpgradeAuthorization;
   requireActive(request: import('fastify').FastifyRequest): void;
 }
@@ -99,6 +102,7 @@ export function bridgeWebSocket(ws: WebSocket, stream: Duplex, onActivity: () =>
 
 export function installBoxRoutes(app: FastifyInstance, options: BoxRouteOptions): void {
   const { service, demo } = options;
+  const agentRoutes = options.agentRoutes !== false && !!service;
   const openSockets = new Set<Duplex>();
   let closing = false;
   let registerWindow = Date.now(), registerCount = 0;
@@ -176,47 +180,49 @@ export function installBoxRoutes(app: FastifyInstance, options: BoxRouteOptions)
     });
   }
 
-  const hostSchema = { type: 'object', additionalProperties: true, maxProperties: 16 };
-  app.post<{ Body: { ticket: string; host?: unknown; agentVersion?: string } }>('/api/box/agent/register', {
-    schema: { body: { type: 'object', additionalProperties: false, required: ['ticket'], properties: {
-      ticket: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' }, host: hostSchema, agentVersion: { type: 'string', maxLength: 32 },
-    } } },
-  }, async (request, reply) => {
-    const box = real(reply); if (!box) return reply;
-    if (Date.now() - registerWindow >= 60_000) { registerWindow = Date.now(); registerCount = 0; }
-    if (++registerCount > 30) return reply.code(429).send({ code: 'BOX_REGISTER_RATE_LIMIT', message: 'Try again later' });
-    try {
-      const { deploymentId: id, credential } = box.store.register(request.body.ticket);
-      return reply.code(201).send({ deploymentId: id, credential, heartbeatIntervalMs: 15_000 });
-    } catch (error) { return fail(reply, error); }
-  });
-
-  const agentId = (request: import('fastify').FastifyRequest, box: BoxService) => box.store.authenticate(bearerToken(request.raw.rawHeaders));
-
-  app.post<{ Body: { snapshot: unknown; results?: AgentResult[] } }>('/api/box/agent/heartbeat', {
-    schema: { body: { type: 'object', additionalProperties: false, required: ['snapshot'], properties: {
-      snapshot: { type: 'object', maxProperties: 16 },
-      results: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false, required: ['id', 'ok'], properties: {
-        id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' }, ok: { type: 'boolean' }, errorCode: { type: 'string', pattern: '^[A-Z_]{1,64}$' },
+  if (agentRoutes) {
+    const hostSchema = { type: 'object', additionalProperties: true, maxProperties: 16 };
+    app.post<{ Body: { ticket: string; host?: unknown; agentVersion?: string } }>('/api/box/agent/register', {
+      schema: { body: { type: 'object', additionalProperties: false, required: ['ticket'], properties: {
+        ticket: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' }, host: hostSchema, agentVersion: { type: 'string', maxLength: 32 },
       } } },
-    } } },
-  }, async (request, reply) => {
-    const box = real(reply); if (!box) return reply;
-    const id = agentId(request, box);
-    if (!id) return reply.code(401).send({ code: 'BOX_AGENT_UNAUTHORIZED', message: 'Machine credential is invalid' });
-    box.store.heartbeat(id, request.body.snapshot);
-    if (request.body.results?.length) box.broker.reportResults(id, request.body.results);
-    return { ok: true, heartbeatIntervalMs: 15_000 };
-  });
+    }, async (request, reply) => {
+      const box = real(reply); if (!box) return reply;
+      if (Date.now() - registerWindow >= 60_000) { registerWindow = Date.now(); registerCount = 0; }
+      if (++registerCount > 30) return reply.code(429).send({ code: 'BOX_REGISTER_RATE_LIMIT', message: 'Try again later' });
+      try {
+        const { deploymentId: id, credential } = box.store.register(request.body.ticket);
+        return reply.code(201).send({ deploymentId: id, credential, heartbeatIntervalMs: 15_000 });
+      } catch (error) { return fail(reply, error); }
+    });
 
-  app.post('/api/box/agent/poll', {
-    schema: { body: { type: 'object', additionalProperties: false, properties: {} } },
-  }, async (request, reply) => {
-    const box = real(reply); if (!box) return reply;
-    const id = agentId(request, box);
-    if (!id) return reply.code(401).send({ code: 'BOX_AGENT_UNAUTHORIZED', message: 'Machine credential is invalid' });
-    return { commands: await box.broker.poll(id) };
-  });
+    const agentId = (request: import('fastify').FastifyRequest, box: BoxService) => box.store.authenticate(bearerToken(request.raw.rawHeaders));
+
+    app.post<{ Body: { snapshot: unknown; results?: AgentResult[] } }>('/api/box/agent/heartbeat', {
+      schema: { body: { type: 'object', additionalProperties: false, required: ['snapshot'], properties: {
+        snapshot: { type: 'object', maxProperties: 16 },
+        results: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false, required: ['id', 'ok'], properties: {
+          id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' }, ok: { type: 'boolean' }, errorCode: { type: 'string', pattern: '^[A-Z_]{1,64}$' },
+        } } },
+      } } },
+    }, async (request, reply) => {
+      const box = real(reply); if (!box) return reply;
+      const id = agentId(request, box);
+      if (!id) return reply.code(401).send({ code: 'BOX_AGENT_UNAUTHORIZED', message: 'Machine credential is invalid' });
+      box.store.heartbeat(id, request.body.snapshot);
+      if (request.body.results?.length) box.broker.reportResults(id, request.body.results);
+      return { ok: true, heartbeatIntervalMs: 15_000 };
+    });
+
+    app.post('/api/box/agent/poll', {
+      schema: { body: { type: 'object', additionalProperties: false, properties: {} } },
+    }, async (request, reply) => {
+      const box = real(reply); if (!box) return reply;
+      const id = agentId(request, box);
+      if (!id) return reply.code(401).send({ code: 'BOX_AGENT_UNAUTHORIZED', message: 'Machine credential is invalid' });
+      return { commands: await box.broker.poll(id) };
+    });
+  }
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: VNC_MAX_PAYLOAD, perMessageDeflate: false,
     // noVNC 请求 binary 子协议时回应；不请求时不选子协议。
@@ -236,7 +242,7 @@ export function installBoxRoutes(app: FastifyInstance, options: BoxRouteOptions)
     socket.on('error', () => socket.destroy());
     const rawPath = (request.url ?? '').split('?', 1)[0];
     const vnc = VNC_PATH.exec(rawPath);
-    const tunnel = TUNNEL_PATH.exec(rawPath);
+    const tunnel = agentRoutes ? TUNNEL_PATH.exec(rawPath) : null;
     if (!vnc && !tunnel) { rejectUpgrade(socket, 404, 'NOT_FOUND'); return; }
     if (closing) { rejectUpgrade(socket, 503, 'SERVER_CLOSING'); return; }
     if (demo || !service) { rejectUpgrade(socket, 403, 'DEMO_FAKE_ONLY'); return; }

@@ -17,7 +17,7 @@ import { defaultCommandRunner, type CommandRunner } from './command.js';
 import { BoxStore, type CloudDeploymentRecord } from './box-store.js';
 import { AgentBroker, CloudAgentAdapter, CloudSshAdapter } from './cloud-adapters.js';
 import { gateHandshake, newDesktopToken } from './gate.js';
-import { BOX_NAMES, BoxError, type BoxSnapshot, type HostAdapter } from './host-adapter.js';
+import { BOX_NAMES, BoxError, resolveBoxNames, type BoxNames, type BoxSnapshot, type HostAdapter } from './host-adapter.js';
 import { localAdapterFor } from './local-adapters.js';
 import { admitDesktop, desktopPolicyFromEnv } from './policy.js';
 
@@ -34,6 +34,8 @@ export interface BoxServiceOptions {
   /** 覆盖桌面策略（默认取 PA_BOX_CONCURRENT_DESKTOPS / PA_BOX_DESKTOP_IDLE_MINUTES 或内置默认值）。 */
   desktopPolicy?: Partial<BoxDesktopPolicy>;
   env?: NodeJS.ProcessEnv;
+  /** 覆盖容器名等；默认 BOX_NAMES（容器 pa-box-desktop）。 */
+  names?: Partial<BoxNames>;
   /** 空闲停机扫描间隔；0 表示不自动扫描（测试中手动调用 sweepIdleDesktops）。 */
   sweepIntervalMs?: number;
 }
@@ -48,7 +50,7 @@ export interface DesktopStream {
   release(): void;
 }
 
-const failedSnapshot = (): BoxSnapshot => ({ host: { state: 'error', detail: '状态查询失败。' }, container: { state: 'unknown', name: BOX_NAMES.container },
+const failedSnapshot = (containerName = BOX_NAMES.container): BoxSnapshot => ({ host: { state: 'error', detail: '状态查询失败。' }, container: { state: 'unknown', name: containerName },
   desktops: [], gateReady: false, memoryPressure: 'unknown' });
 
 export class BoxService {
@@ -56,6 +58,7 @@ export class BoxService {
   readonly broker = new AgentBroker();
   readonly platform: NodeJS.Platform;
   readonly policy: BoxDesktopPolicy;
+  readonly names: BoxNames;
   private readonly run: CommandRunner;
   private readonly local: HostAdapter | undefined;
   private readonly operations = new Map<string, BoxOperation>();
@@ -72,7 +75,8 @@ export class BoxService {
     this.now = options.now ?? Date.now;
     this.cacheMs = options.cacheMs ?? 2_000;
     this.policy = desktopPolicyFromEnv(options.env ?? process.env, options.desktopPolicy);
-    this.local = options.localAdapter === null ? undefined : options.localAdapter ?? localAdapterFor(this.platform, this.run);
+    this.names = resolveBoxNames(options.env ?? process.env, options.names);
+    this.local = options.localAdapter === null ? undefined : options.localAdapter ?? localAdapterFor(this.platform, this.run, this.names);
     this.store = new BoxStore(join(options.dataDir, 'box.sqlite'), this.now);
     const interval = options.sweepIntervalMs ?? 60_000;
     if (interval > 0) {
@@ -89,15 +93,15 @@ export class BoxService {
     const record = this.store.get(id);
     if (!record) throw new BoxError('BOX_DEPLOYMENT_NOT_FOUND', '部署不存在。', 404);
     const adapter = record.connection === 'ssh'
-      ? new CloudSshAdapter(record.endpoint!, this.run)
-      : new CloudAgentAdapter(record.id, this.store, this.broker, this.now);
+      ? new CloudSshAdapter(record.endpoint!, this.run, this.names)
+      : new CloudAgentAdapter(record.id, this.store, this.broker, this.now, this.names);
     return { adapter, record };
   }
 
   private snapshot(id: string, adapter: HostAdapter, fresh = false): Promise<BoxSnapshot> {
     const cached = this.cache.get(id);
     if (!fresh && cached && this.now() - cached.at < this.cacheMs) return cached.value;
-    const value = adapter.status().catch(failedSnapshot).then(snapshot => { this.observe(id, snapshot); return snapshot; });
+    const value = adapter.status().catch(() => failedSnapshot(this.names.container)).then(snapshot => { this.observe(id, snapshot); return snapshot; });
     this.cache.set(id, { at: this.now(), value });
     return value;
   }

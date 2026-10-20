@@ -19,6 +19,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 PROFILE=pa-box
 CONTEXT=colima-pa-box
 IMAGE=personal-agent/pa-box:0.1
+CONTAINER="${PA_BOX_CONTAINER:-pa-box-desktop}"
 GATE_PORT=47830
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -61,8 +62,8 @@ cmd_verify() {
   need docker
   local failed=0 inspect
   echo "默认 docker 上下文：$(current_context)"
-  if ! inspect="$(docker_box inspect pa-box --format '{{json .HostConfig.PortBindings}} {{.HostConfig.Privileged}} {{json .HostConfig.SecurityOpt}} {{json .Mounts}}' 2>/dev/null)"; then
-    echo "容器 pa-box 不存在（在 personal-agent 的「Linux 云电脑」页点击启动容器，或先 build）" >&2
+  if ! inspect="$(docker_box inspect "$CONTAINER" --format '{{json .HostConfig.PortBindings}} {{.HostConfig.Privileged}} {{json .HostConfig.SecurityOpt}} {{json .Mounts}}' 2>/dev/null)"; then
+    echo "容器 ${CONTAINER} 不存在（在 personal-agent 的「Linux 云电脑」页点击启动容器，或先 build）" >&2
     return 1
   fi
   case "$inspect" in *'"HostIp":"127.0.0.1","HostPort":"47830"'*) ;; *) echo "FAIL: 网关端口未只发布到 127.0.0.1:${GATE_PORT}" >&2; failed=1 ;; esac
@@ -81,7 +82,7 @@ cmd_verify() {
     done <<<"$listeners"
   fi
   # 容器内除网关外不应有任何 TCP 监听（桌面只走 unix socket）。
-  if ! docker_box exec pa-box /bin/bash --noprofile --norc -c \
+  if ! docker_box exec "$CONTAINER" /bin/bash --noprofile --norc -c \
       'for p in $(pgrep -x Xvnc || true); do python3 -I /usr/local/lib/pa-box/no-tcp-listen.py "$p" || exit 1; done'; then
     echo "FAIL: 有桌面 Xvnc 在监听 TCP" >&2; failed=1
   fi
@@ -94,7 +95,7 @@ cmd_stop() { need colima; colima stop "$PROFILE"; }
 cmd_status() {
   need colima
   colima list --json | grep "\"name\":\"${PROFILE}\"" || echo "profile ${PROFILE} 不存在"
-  docker_box ps -a --filter name=^pa-box$ --format '{{.Names}} {{.Status}} {{.Ports}}' 2>/dev/null || true
+  docker_box ps -a --filter "name=^${CONTAINER}$" --format '{{.Names}} {{.Status}} {{.Ports}}' 2>/dev/null || true
 }
 
 case "${1:-}" in

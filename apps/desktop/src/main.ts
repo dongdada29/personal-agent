@@ -58,7 +58,7 @@ async function stopServer(): Promise<void> {
 }
 
 async function startManaged(): Promise<boolean> {
-  const next = new ServerSupervisor({ entry: serverEntry(), dataDir: settings.dataDir ?? defaultDataDir() });
+  const next = new ServerSupervisor({ entry: serverEntry(), dataDir: settings.dataDir ?? defaultDataDir(process.env, app.getPath('userData')) });
   supervisor = next;
   next.on('unexpected-exit', () => {
     if (supervisor !== next || quitting) return;

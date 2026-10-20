@@ -12,15 +12,15 @@ import type { CommandRunner } from './command.js';
 import { BOX_REMOTE_SECCOMP_PATH, BOX_SECCOMP_FILE, resolveBoxAsset } from './assets.js';
 import {
   BOX_NAMES, BOX_QUOTA, BoxError, DockerBox, connectLoopback, containerActions,
-  type BoxSnapshot, type DesktopOp, type HostAdapter,
+  type BoxNames, type BoxSnapshot, type DesktopOp, type HostAdapter,
 } from './host-adapter.js';
 import {
   loopbackListenAddress, parseColimaList, parseColimaVersion, parseLinuxMemoryPressure, parseLsofListenAddresses,
   parseMacMemoryPressure, parseSingleVersion, parseWslList,
 } from './parsers.js';
 
-const unavailable = (host: BoxHostStatus, memoryPressure: BoxMemoryPressure = 'unknown'): BoxSnapshot =>
-  ({ host, container: { state: 'unknown', name: BOX_NAMES.container }, desktops: [], gateReady: false, memoryPressure });
+const unavailable = (host: BoxHostStatus, memoryPressure: BoxMemoryPressure = 'unknown', containerName = BOX_NAMES.container): BoxSnapshot =>
+  ({ host, container: { state: 'unknown', name: containerName }, desktops: [], gateReady: false, memoryPressure });
 
 export interface ColimaAdapterOptions {
   run: CommandRunner;
@@ -29,6 +29,7 @@ export interface ColimaAdapterOptions {
   /** 测试注入；默认解析仓库 / 安装包里的 deploy/box/pa-box-seccomp.json。 */
   seccompProfile?: () => string;
   now?: () => number;
+  names?: BoxNames;
 }
 
 const colimaArch = (arch: string) => arch === 'arm64' ? 'aarch64' : arch === 'x64' ? 'x86_64' : undefined;
@@ -52,12 +53,14 @@ export class ColimaAdapter implements HostAdapter {
   readonly kind = 'local' as const;
   private readonly docker: DockerBox;
   private readonly now: () => number;
+  private readonly names: BoxNames;
   private listenerCheckedAt = 0;
 
   constructor(private readonly options: ColimaAdapterOptions) {
     this.now = options.now ?? Date.now;
-    this.docker = new DockerBox(options.run, args => ['docker', ['--context', BOX_NAMES.dockerContext, ...args]],
-      { seccompProfile: options.seccompProfile ?? (() => resolveBoxAsset(BOX_SECCOMP_FILE)) });
+    this.names = options.names ?? BOX_NAMES;
+    this.docker = new DockerBox(options.run, args => ['docker', ['--context', this.names.dockerContext, ...args]],
+      { seccompProfile: options.seccompProfile ?? (() => resolveBoxAsset(BOX_SECCOMP_FILE)), names: this.names });
   }
 
   /** macOS 的系统内存压力等级（与 `memory_pressure` 命令同源）。 */
@@ -69,23 +72,23 @@ export class ColimaAdapter implements HostAdapter {
   async status(): Promise<BoxSnapshot> {
     const version = await this.options.run('colima', ['version'], { timeoutMs: 10_000 });
     if (version.notFound) {
-      return unavailable({ state: 'not_installed', detail: '未安装 Colima。', installHint: 'brew install colima docker' });
+      return unavailable({ state: 'not_installed', detail: '未安装 Colima。', installHint: 'brew install colima docker' }, 'unknown', this.names.container);
     }
     const memoryPressure = await this.memoryPressure();
     const listed = await this.options.run('colima', ['list', '--json'], { timeoutMs: 15_000 });
     if (listed.code !== 0) {
-      return unavailable({ state: 'error', version: parseColimaVersion(version.stdout), detail: listed.timedOut ? '查询 Colima 超时。' : '无法读取 Colima profile 列表。' }, memoryPressure);
+      return unavailable({ state: 'error', version: parseColimaVersion(version.stdout), detail: listed.timedOut ? '查询 Colima 超时。' : '无法读取 Colima profile 列表。' }, memoryPressure, this.names.container);
     }
     const profile = parseColimaList(listed.stdout).find(item => item.name === BOX_NAMES.profile);
     const base = { version: parseColimaVersion(version.stdout), profile: BOX_NAMES.profile };
     if (!profile) {
-      return unavailable({ ...base, state: 'not_configured', detail: `尚未创建 Colima profile ${BOX_NAMES.profile}。`,
-        installHint: `点击“启动 VM”会以 ${BOX_QUOTA.vmCpus} vCPU / ${BOX_QUOTA.vmMemoryGiB}GiB / ${BOX_QUOTA.vmDiskGiB}GiB、无宿主挂载、不切换默认 docker 上下文创建该 profile。` }, memoryPressure);
+      return unavailable({ ...base, state: 'not_configured', detail: `尚未创建 Colima profile ${this.names.profile}。`,
+        installHint: `点击“启动 VM”会以 ${BOX_QUOTA.vmCpus} vCPU / ${BOX_QUOTA.vmMemoryGiB}GiB / ${BOX_QUOTA.vmDiskGiB}GiB、无宿主挂载、不切换默认 docker 上下文创建该 profile。` }, memoryPressure, this.names.container);
     }
     const host: BoxHostStatus = { ...base, state: profile.state, arch: profile.arch, runtime: profile.runtime,
       resources: { cpus: profile.cpus, memoryBytes: profile.memoryBytes, diskBytes: profile.diskBytes } };
     if (profile.state !== 'running') {
-      return { host, container: { state: 'unknown', name: BOX_NAMES.container, detail: 'VM 未运行。' }, desktops: [], gateReady: false, memoryPressure };
+      return { host, container: { state: 'unknown', name: this.names.container, detail: 'VM 未运行。' }, desktops: [], gateReady: false, memoryPressure };
     }
     const { container, desktops, gateReady } = await this.docker.inspect();
     return { host, container, desktops, gateReady, memoryPressure };
@@ -166,7 +169,7 @@ export class ColimaAdapter implements HostAdapter {
   }
 }
 
-export interface WslAdapterOptions { run: CommandRunner }
+export interface WslAdapterOptions { run: CommandRunner; names?: BoxNames }
 
 /**
  * Windows 宿主：专用 WSL2 发行版 pa-box（需在 /etc/wsl.conf 关闭 automount 与 interop，见 docs/windows-gaps.md）。
@@ -177,27 +180,29 @@ export class Wsl2Adapter implements HostAdapter {
   readonly id = 'wsl2' as const;
   readonly kind = 'local' as const;
   private readonly docker: DockerBox;
+  private readonly names: BoxNames;
   constructor(private readonly options: WslAdapterOptions) {
-    this.docker = new DockerBox(options.run, args => ['wsl.exe', ['-d', BOX_NAMES.wslDistro, '--exec', 'docker', ...args]],
-      { seccompProfile: () => BOX_REMOTE_SECCOMP_PATH });
+    this.names = options.names ?? BOX_NAMES;
+    this.docker = new DockerBox(options.run, args => ['wsl.exe', ['-d', this.names.wslDistro, '--exec', 'docker', ...args]],
+      { seccompProfile: () => BOX_REMOTE_SECCOMP_PATH, names: this.names });
   }
 
   private async memoryPressure(): Promise<BoxMemoryPressure> {
-    const result = await this.options.run('wsl.exe', ['-d', BOX_NAMES.wslDistro, '--exec', 'cat', '/proc/pressure/memory'], { timeoutMs: 10_000, encoding: 'auto' });
+    const result = await this.options.run('wsl.exe', ['-d', this.names.wslDistro, '--exec', 'cat', '/proc/pressure/memory'], { timeoutMs: 10_000, encoding: 'auto' });
     return result.code === 0 ? parseLinuxMemoryPressure(result.stdout) : 'unknown';
   }
 
   async status(): Promise<BoxSnapshot> {
     const listed = await this.options.run('wsl.exe', ['-l', '-v'], { timeoutMs: 15_000, encoding: 'auto' });
     const hint = '创建发行版尚未自动化，请按 docs/windows-gaps.md 的步骤导入。';
-    if (listed.notFound) return unavailable({ state: 'not_installed', detail: '未检测到 WSL。', installHint: '以管理员身份运行 `wsl --install --no-distribution`，重启后再回来。' });
+    if (listed.notFound) return unavailable({ state: 'not_installed', detail: '未检测到 WSL。', installHint: '以管理员身份运行 `wsl --install --no-distribution`，重启后再回来。' }, 'unknown', this.names.container);
     // 已安装 WSL 但没有任何发行版时，wsl -l -v 返回非 0。
-    if (listed.code !== 0) return unavailable({ state: 'not_configured', detail: '尚未创建 WSL2 发行版 pa-box。', installHint: hint });
-    const distro = parseWslList(listed.stdout).find(item => item.name.toLowerCase() === BOX_NAMES.wslDistro);
-    if (!distro) return unavailable({ state: 'not_configured', detail: '尚未创建 WSL2 发行版 pa-box。', installHint: hint });
-    if (distro.version !== 2) return unavailable({ state: 'error', profile: distro.name, detail: 'pa-box 发行版不是 WSL2，box 需要 WSL2。' });
+    if (listed.code !== 0) return unavailable({ state: 'not_configured', detail: '尚未创建 WSL2 发行版 pa-box。', installHint: hint }, 'unknown', this.names.container);
+    const distro = parseWslList(listed.stdout).find(item => item.name.toLowerCase() === this.names.wslDistro);
+    if (!distro) return unavailable({ state: 'not_configured', detail: '尚未创建 WSL2 发行版 pa-box。', installHint: hint }, 'unknown', this.names.container);
+    if (distro.version !== 2) return unavailable({ state: 'error', profile: distro.name, detail: 'pa-box 发行版不是 WSL2，box 需要 WSL2。' }, 'unknown', this.names.container);
     const host: BoxHostStatus = { state: distro.state === 'running' ? 'running' : 'stopped', profile: distro.name, runtime: 'docker (WSL2)' };
-    if (host.state !== 'running') return { host, container: { state: 'unknown', name: BOX_NAMES.container, detail: '发行版未运行。' }, desktops: [], gateReady: false, memoryPressure: 'unknown' };
+    if (host.state !== 'running') return { host, container: { state: 'unknown', name: this.names.container, detail: '发行版未运行。' }, desktops: [], gateReady: false, memoryPressure: 'unknown' };
     const [{ container, desktops, gateReady }, memoryPressure] = await Promise.all([this.docker.inspect(), this.memoryPressure()]);
     return { host, container, desktops, gateReady, memoryPressure };
   }
@@ -211,12 +216,12 @@ export class Wsl2Adapter implements HostAdapter {
   async perform(action: BoxAction): Promise<void> {
     if (action === 'start_vm') {
       // 启动发行版；其中的 dockerd 由发行版内 systemd 或 wsl.conf 的 boot 命令拉起。
-      const result = await this.options.run('wsl.exe', ['-d', BOX_NAMES.wslDistro, '--exec', 'true'], { timeoutMs: 120_000, encoding: 'auto' });
+      const result = await this.options.run('wsl.exe', ['-d', this.names.wslDistro, '--exec', 'true'], { timeoutMs: 120_000, encoding: 'auto' });
       if (result.code !== 0) throw new BoxError('BOX_VM_START_FAILED', '启动 WSL2 发行版 pa-box 失败。');
       return;
     }
     if (action === 'stop_vm') {
-      const result = await this.options.run('wsl.exe', ['--terminate', BOX_NAMES.wslDistro], { timeoutMs: 60_000, encoding: 'auto' });
+      const result = await this.options.run('wsl.exe', ['--terminate', this.names.wslDistro], { timeoutMs: 60_000, encoding: 'auto' });
       if (result.code !== 0) throw new BoxError('BOX_VM_STOP_FAILED', '停止 WSL2 发行版 pa-box 失败。');
       return;
     }
@@ -239,21 +244,27 @@ export interface LinuxAdapterOptions {
   run: CommandRunner;
   seccompProfile?: () => string;
   readPressure?: () => Promise<string>;
+  names?: BoxNames;
 }
 
 /**
  * Linux 宿主：rootless Podman 优先，其次 Docker。没有 VM 层（共享宿主内核，隔离弱于 mac/Windows）。
- * 只管理名为 pa-box 的容器；rootless 检测、gVisor 等加固尚未实现。
+ * 只管理当前配置名的 box 容器（默认 pa-box-desktop）；rootless 检测、gVisor 等加固尚未实现。
  */
 export class LinuxContainerAdapter implements HostAdapter {
   readonly kind = 'local' as const;
   id: 'podman' | 'docker' = 'podman';
   private engine: 'podman' | 'docker' | undefined;
-  constructor(private readonly options: LinuxAdapterOptions) {}
+  private readonly names: BoxNames;
+  constructor(private readonly options: LinuxAdapterOptions) {
+    this.names = options.names ?? BOX_NAMES;
+  }
 
   private box(): DockerBox {
     const engine = this.engine ?? 'podman';
-    return new DockerBox(this.options.run, args => [engine, args], { seccompProfile: this.options.seccompProfile ?? (() => resolveBoxAsset(BOX_SECCOMP_FILE)) });
+    return new DockerBox(this.options.run, args => [engine, args], {
+      seccompProfile: this.options.seccompProfile ?? (() => resolveBoxAsset(BOX_SECCOMP_FILE)), names: this.names,
+    });
   }
 
   private async memoryPressure(): Promise<BoxMemoryPressure> {
@@ -268,13 +279,13 @@ export class LinuxContainerAdapter implements HostAdapter {
       this.engine = engine;
       this.id = engine;
       const memoryPressure = await this.memoryPressure();
-      if (version.code !== 0) return unavailable({ state: 'stopped', runtime: engine, detail: `${engine} 已安装，但守护进程 / 服务未运行。` }, memoryPressure);
+      if (version.code !== 0) return unavailable({ state: 'stopped', runtime: engine, detail: `${engine} 已安装，但守护进程 / 服务未运行。` }, memoryPressure, this.names.container);
       const host: BoxHostStatus = { state: 'running', runtime: engine, version: parseSingleVersion(version.stdout),
         detail: '共享宿主内核（无 VM 边界），建议 rootless 运行。' };
       const { container, desktops, gateReady } = await this.box().inspect();
       return { host, container, desktops, gateReady, memoryPressure };
     }
-    return unavailable({ state: 'not_installed', detail: '未检测到 Podman 或 Docker。', installHint: 'sudo apt install podman（推荐 rootless）' });
+    return unavailable({ state: 'not_installed', detail: '未检测到 Podman 或 Docker。', installHint: 'sudo apt install podman（推荐 rootless）' }, 'unknown', this.names.container);
   }
 
   actions(snapshot: BoxSnapshot): BoxAction[] {
@@ -299,9 +310,9 @@ export class LinuxContainerAdapter implements HostAdapter {
 }
 
 /** 选出本机平台对应的本地适配器。 */
-export function localAdapterFor(platform: NodeJS.Platform, run: CommandRunner): HostAdapter | undefined {
-  if (platform === 'darwin') return new ColimaAdapter({ run });
-  if (platform === 'win32') return new Wsl2Adapter({ run });
-  if (platform === 'linux') return new LinuxContainerAdapter({ run });
+export function localAdapterFor(platform: NodeJS.Platform, run: CommandRunner, names?: BoxNames): HostAdapter | undefined {
+  if (platform === 'darwin') return new ColimaAdapter({ run, names });
+  if (platform === 'win32') return new Wsl2Adapter({ run, names });
+  if (platform === 'linux') return new LinuxContainerAdapter({ run, names });
   return undefined;
 }

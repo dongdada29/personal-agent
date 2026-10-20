@@ -65,6 +65,7 @@ export class TaskStore {
    * 也无法写入 claude 任务、注册仓库路径或把默认引擎改为 claude。
    */
   readonly fakeOnly: boolean;
+  private closed = false;
 
   constructor(public readonly filename: string, options: { fakeOnly?: boolean } = {}) {
     this.fakeOnly = options.fakeOnly === true;
@@ -636,5 +637,11 @@ export class TaskStore {
     });
   }
 
-  close(): void { this.listeners.clear(); this.db.close(); }
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.listeners.clear();
+    try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* still close */ }
+    this.db.close();
+  }
 }

@@ -111,3 +111,14 @@ jobs:
       - name: Package
         working-directory: apps/desktop
         run: npx electron-builder --config electron-builder.yml --${{ matrix.target }} --publish never
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.AppImage
+          if-no-files-found: error
+          retention-days: 14

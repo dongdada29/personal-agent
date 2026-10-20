@@ -34,10 +34,11 @@ export function windowsPowerShellPath(env: NodeJS.ProcessEnv = process.env): str
 /** 生成查询脚本；pids 只会是正整数（调用方校验），不会拼入任何外部字符串。 */
 export function windowsProcessQueryScript(pids?: number[]): string {
   const filter = pids && pids.length ? ` -Filter "${pids.map(pid => `ProcessId=${pid}`).join(' OR ')}"` : '';
+  // 只取归属判定需要的四列，并给 CIM 一个短超时：Windows CI 上完整 Win32_Process 枚举很慢。
   return [
     "$ErrorActionPreference='Stop'",
-    '$ProgressPreference=\'SilentlyContinue\'',
-    `$rows=@(Get-CimInstance -ClassName Win32_Process${filter} | ForEach-Object {`,
+    "$ProgressPreference='SilentlyContinue'",
+    `$rows=@(Get-CimInstance -ClassName Win32_Process${filter} -Property ProcessId,ParentProcessId,CreationDate,CommandLine -OperationTimeoutSec 5 | ForEach-Object {`,
     '  [pscustomobject]@{ p=[int64]$_.ProcessId; pp=[int64]$_.ParentProcessId;',
     "    c=$(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null }); l=$_.CommandLine } })",
     // -InputObject 保证即使只有 0/1 行也输出 JSON 数组。
@@ -68,7 +69,7 @@ export const queryWindowsProcesses: WindowsQuery = (pids) => new Promise((resolv
   if (pids?.some(pid => !Number.isSafeInteger(pid) || pid < 1)) { reject(new Error('invalid pid')); return; }
   const env = { SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT, PATH: process.env.PATH ?? '' };
   execFile(windowsPowerShellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', windowsProcessQueryScript(pids)],
-    { encoding: 'utf8', timeout: 10_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env }, (error, stdout) => {
+    { encoding: 'utf8', timeout: pids?.length ? 8_000 : 10_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env }, (error, stdout) => {
       if (error) { reject(error); return; }
       const rows = parseWindowsProcessTable(stdout);
       if (!rows) reject(new Error('unparseable process table')); else resolve(rows);

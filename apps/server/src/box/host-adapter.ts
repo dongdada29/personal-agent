@@ -8,7 +8,7 @@
  * 桌面访问链路（L0 实测后的固定做法）：
  *   浏览器 ⇄ server（Cookie / 桌面令牌鉴权，WebSocket 由 server 终结）
  *          ⇄ 宿主 127.0.0.1:47830（或 ssh -W / 反向隧道）
- *          ⇄ 容器内 pa-box-gate:6080（每桌面、短时有效的令牌）
+ *          ⇄ 容器内 pa-box-gate:6080（每桌面、120 秒内可重复使用的令牌）
  *          ⇄ /run/pa-box/dN/vnc.sock（0660，只有网关用户可连）⇄ Xvnc
  * 桌面从不监听 TCP，box 内的其他 bot 无法绕过网关连到别人的桌面。
  */
@@ -60,16 +60,39 @@ export interface HostAdapter {
   openGate(): Promise<Duplex>;
 }
 
-/** box 的固定命名。改名会让已有安装失联，所以集中在这里。 */
-export const BOX_NAMES = {
+export interface BoxNames {
+  profile: string;
+  dockerContext: string;
+  container: string;
+  image: string;
+  volume: string;
+  volumeDestination: string;
+  wslDistro: string;
+}
+
+/**
+ * box 的默认命名。Colima profile / docker context / WSL 发行版仍用 `pa-box`；
+ * **容器名**默认 `pa-box-desktop`，避免本机已有无关的 `pa-box` 容器挡住 verify/start。
+ * 用 `PA_BOX_CONTAINER` 覆盖（见 resolveBoxNames）。
+ */
+export const BOX_NAMES: BoxNames = {
   profile: 'pa-box',
   dockerContext: 'colima-pa-box',
-  container: 'pa-box',
+  container: 'pa-box-desktop',
   image: 'personal-agent/pa-box:0.1',
   volume: 'pa-box-home',
   volumeDestination: '/home',
   wslDistro: 'pa-box',
-} as const;
+};
+
+/** Docker 容器名：字母开头，最长 63，只含字母数字、点、下划线、短横线。 */
+export const BOX_CONTAINER_NAME = /^[a-zA-Z][a-zA-Z0-9_.-]{0,62}$/;
+
+export function resolveBoxNames(env: NodeJS.ProcessEnv = process.env, overrides?: Partial<BoxNames>): BoxNames {
+  const raw = (overrides?.container ?? env.PA_BOX_CONTAINER ?? env.PERSONAL_AGENT_BOX_CONTAINER ?? BOX_NAMES.container).trim();
+  if (!BOX_CONTAINER_NAME.test(raw)) throw new BoxError('BOX_INPUT_INVALID', 'PA_BOX_CONTAINER 不是合法的 Docker 容器名。', 400);
+  return { ...BOX_NAMES, ...overrides, container: raw };
+}
 
 /**
  * 资源配额（L0 实测，M1 Mac mini 16GB）：
@@ -90,7 +113,7 @@ export const BOX_CTL = '/usr/local/sbin/pa-box-ctl';
 export interface BoxRunOptions {
   /** 由 docker CLI 读取的 seccomp 配置文件路径（CLI 所在机器上的路径）。 */
   seccompProfile: string;
-  names?: typeof BOX_NAMES;
+  names?: BoxNames;
   quota?: typeof BOX_QUOTA;
 }
 
@@ -135,7 +158,7 @@ export type DockerInvocation = (args: string[]) => [file: string, args: string[]
 export interface DockerBoxOptions {
   /** 由调用时解析：本地是仓库 / 安装包里的文件，WSL2 与云端是主机上的固定路径。 */
   seccompProfile: () => string;
-  names?: typeof BOX_NAMES;
+  names?: BoxNames;
 }
 
 export interface DockerBoxInspection {
@@ -151,7 +174,7 @@ export interface DockerBoxInspection {
  * WSL2 用 `wsl.exe -d pa-box --exec docker`，Linux 用 `podman` / `docker`，ssh 用 `ssh <alias> -- docker`。
  */
 export class DockerBox {
-  private readonly names: typeof BOX_NAMES;
+  private readonly names: BoxNames;
   constructor(private readonly run: CommandRunner, private readonly invoke: DockerInvocation, private readonly options: DockerBoxOptions) {
     this.names = options.names ?? BOX_NAMES;
   }
@@ -221,7 +244,7 @@ export class DockerBox {
     await this.expect(['stop', '--time', '20', this.names.container], 'BOX_CONTAINER_STOP_FAILED', '停止 box 容器失败。', 60_000);
   }
 
-  /** 只删除名为 pa-box 的容器本身；不删除卷 pa-box-home 与镜像。 */
+  /** 只删除当前配置的 box 容器本身；不删除卷与镜像。 */
   async remove(): Promise<void> {
     const [file, args] = this.invoke(['rm', '-f', this.names.container]);
     await this.run(file, args, { timeoutMs: 60_000 });

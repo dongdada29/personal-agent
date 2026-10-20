@@ -24,6 +24,15 @@ const message = (type) => new Promise((resolveMessage, reject) => {
     if (value?.type === type) { clearTimeout(timer); child.off('message', onMessage); resolveMessage(value); }
   });
 });
+async function removeDataDir() {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try { rmSync(dataDir, { recursive: true, force: true }); return; }
+    catch (error) {
+      if (!['EBUSY', 'EPERM', 'ENOTEMPTY'].includes(error?.code) || attempt === 7) throw error;
+      await new Promise(done => setTimeout(done, 50 * (attempt + 1)));
+    }
+  }
+}
 let exitCode = 1;
 try {
   child.send({ type: 'start', token, dataDir });
@@ -34,14 +43,21 @@ try {
   const health = await (await fetch(`${base}/api/health`, { headers })).json();
   if (health.status !== 'ok') throw new Error(`health ${JSON.stringify(health)}`);
   const created = await (await fetch(`${base}/api/tasks`, { method: 'POST', headers, body: JSON.stringify({ commandId: 'desktop-smoke', goal: 'Desktop bundle smoke' }) })).json();
-  let status = '';
+  let snapshot = created;
+  let status = created?.task?.status ?? created?.status ?? '';
   for (let attempt = 0; attempt < 120; attempt++) {
-    const snapshot = await (await fetch(`${base}/api/tasks/${created.id}`, { headers })).json();
-    status = snapshot.task.status;
+    snapshot = await (await fetch(`${base}/api/tasks/${created.id}`, { headers })).json();
+    status = snapshot.task?.status ?? snapshot.status ?? '';
     if (!['queued', 'running'].includes(status)) break;
     await new Promise(done => setTimeout(done, 250));
   }
-  if (!['completed', 'waiting_human', 'succeeded', 'done'].includes(status)) throw new Error(`fake task ended as ${status}`);
+  if (!['completed', 'waiting_human', 'succeeded', 'done'].includes(status)) {
+    const events = Array.isArray(snapshot.events) ? snapshot.events : [];
+    const last = events.at(-1);
+    const errorCode = last?.data?.reason ?? last?.data?.code ?? last?.data?.error ?? snapshot.task?.status ?? 'unknown';
+    const errorMessage = last?.data?.message ?? last?.data?.error ?? JSON.stringify(last?.data ?? snapshot.task ?? snapshot);
+    throw new Error(`fake task ended as ${status} errorCode=${errorCode} errorMessage=${errorMessage} lastEvents=${JSON.stringify(events.slice(-5))}`);
+  }
   child.send({ type: 'shutdown' });
   const stopped = await message('stopped');
   if (stopped.exitCode !== 0) throw new Error('unclean shutdown');
@@ -49,9 +65,14 @@ try {
   exitCode = 0;
 } catch (error) {
   console.error(JSON.stringify({ result: 'FAIL', error: String(error?.message ?? error) }));
-  child.kill();
+  try { if (child.connected) child.send({ type: 'shutdown' }); } catch { /* already gone */ }
+  await Promise.race([
+    new Promise(done => { if (child.exitCode !== null) done(); else child.once('exit', done); }),
+    new Promise(done => setTimeout(done, 5_000)),
+  ]);
+  if (child.exitCode === null && child.kill) child.kill();
 } finally {
   await new Promise(done => { if (child.exitCode !== null) done(); else child.once('exit', done); });
-  rmSync(dataDir, { recursive: true, force: true });
+  await removeDataDir().catch(error => console.error(JSON.stringify({ result: 'FAIL', cleanup: String(error?.message ?? error) })));
   process.exit(exitCode);
 }

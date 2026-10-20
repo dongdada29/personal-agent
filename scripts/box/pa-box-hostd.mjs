@@ -13,7 +13,7 @@
  *
  * 配置文件（默认 /etc/pa-box/hostd.json，可用 PA_BOX_HOSTD_CONFIG 覆盖）：
  *   { "server": "https://agent.example.com", "engine": "docker", "credentialFile": "/var/lib/pa-box/credential",
- *     "seccompProfile": "/etc/pa-box/seccomp.json" }
+ *     "seccompProfile": "/etc/pa-box/seccomp.json", "container": "pa-box-desktop" }
  */
 import { execFile } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
@@ -25,7 +25,7 @@ import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const AGENT_VERSION = '0.1.0';
-export const NAMES = { container: 'pa-box', image: 'personal-agent/pa-box:0.1', volume: 'pa-box-home', volumeDestination: '/home' };
+export const NAMES = { container: 'pa-box-desktop', image: 'personal-agent/pa-box:0.1', volume: 'pa-box-home', volumeDestination: '/home' };
 export const GATE_CONTAINER_PORT = 6080;
 export const GATE_HOST_PORT = 47830;
 export const CTL = '/usr/local/sbin/pa-box-ctl';
@@ -92,12 +92,17 @@ function run(file, args, { input, timeoutMs = 30_000 } = {}) {
   });
 }
 
+function applyContainerName(value) {
+  if (typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,62}$/.test(value)) NAMES.container = value;
+}
+
 function loadConfig(path) {
   const config = JSON.parse(readFileSync(path, 'utf8'));
   const server = new URL(config.server);
   const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(server.hostname);
   if (server.protocol !== 'https:' && !(server.protocol === 'http:' && loopback)) throw new Error('server must be an https:// URL');
   if (!['docker', 'podman'].includes(config.engine ?? 'docker')) throw new Error('engine must be docker or podman');
+  applyContainerName(config.container ?? process.env.PA_BOX_CONTAINER);
   return { server: server.origin, engine: config.engine ?? 'docker', credentialFile: config.credentialFile ?? '/var/lib/pa-box/credential',
     seccompProfile: config.seccompProfile ?? '/etc/pa-box/seccomp.json' };
 }

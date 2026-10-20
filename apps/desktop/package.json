@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "claude-code-acp-ts": "0.65.0",
-    "ws": "8.18.3"
+    "ws": "8.22.0"
   },
   "devDependencies": {
     "@types/ws": "8.18.1",

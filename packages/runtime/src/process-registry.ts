@@ -75,6 +75,11 @@ function bounded<T>(promise: Promise<T>, ms: number, error: EngineError): Promis
   });
 }
 
+/** POSIX 管道 READY 通常在几十毫秒内；Windows 要拉起 Node IPC，CI 上再叠加杀毒/WMI，给更宽的期限。 */
+export function ownerReadyDeadlineMs(platform: NodeJS.Platform = process.platform): number {
+  return platform === 'win32' ? 15_000 : 3_000;
+}
+
 /** Recovery never trusts a saved PID alone, and never returns argv or env. */
 export async function verifyProcessOwner(record: OwnedProcessRecord): Promise<'owned' | 'gone' | 'unsafe'> {
   if (!supported() || !UUID.test(record.id) || !Number.isSafeInteger(record.pid) || record.pid < 1 ||
@@ -177,6 +182,12 @@ export function spawnOwnedProcess(options: {
     wrapperPath: processOwnerWrapperPath, startedAt: new Date().toISOString(), status: 'active', kind: options.kind };
   let control = '', closing = false, readyResolved = false, released = false;
   let childIdentity: Promise<WindowsProcessIdentity | undefined> | undefined;
+  // Windows：一有 PID 就查创建时间，与 READY 闸门并行，避免 start() 里再等一轮慢 CIM。
+  let ownerIdentity: Promise<WindowsProcessRow[]> | undefined;
+  if (windows && record.pid > 0) {
+    ownerIdentity = windowsProcessOps.query([record.pid]);
+    void ownerIdentity.catch(() => {});
+  }
   let resolveReady!: () => void, rejectReady!: (cause: unknown) => void;
   const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
   void ready.catch(() => {});
@@ -267,12 +278,15 @@ export function spawnOwnedProcess(options: {
     start(hooks = {}, signal) {
       if (!startPromise) lifecycleHooks = hooks;
       startPromise ??= (async () => {
-        await bounded(ready, 3_000, new EngineError('ENGINE_FAILED', 'Process owner startup exceeded its deadline.'));
+        await bounded(ready, ownerReadyDeadlineMs(), new EngineError('ENGINE_FAILED', 'Process owner startup exceeded its deadline.'));
         if (closing || signal?.aborted) throw new EngineError('ABORTED', 'Process startup was cancelled.');
         if (windows) {
           // 登记前先取得 owner 的创建时间并核对命令行；取不到就不放行命令（之后无法安全恢复）。
           let rows: WindowsProcessRow[] = [];
-          try { rows = await bounded(windowsProcessOps.query([record.pid]), 10_000, new EngineError('ENGINE_FAILED', 'Process owner identity query timed out.')); } catch { /* 下方统一报错 */ }
+          try {
+            rows = await bounded(ownerIdentity ?? windowsProcessOps.query([record.pid]), 10_000,
+              new EngineError('ENGINE_FAILED', 'Process owner identity query timed out.'));
+          } catch { /* 下方统一报错 */ }
           const row = rows.find(item => item.pid === record.pid && item.created !== null &&
             windowsOwnerCommandMatches(item.commandLine, process.execPath, processOwnerWrapperPath, id));
           if (!row) throw new EngineError('ENGINE_FAILED', 'Process owner identity could not be verified.');

@@ -10,12 +10,15 @@ import { DEFAULT_CONNECT_URL, parseConnectUrl } from './connect-mode.js';
 export interface DesktopSettings {
   mode: 'managed' | 'connect';
   connectUrl: string;
-  /** 托管模式的数据目录；默认与命令行版相同（~/.personal-agent），可用 PERSONAL_AGENT_DATA_DIR 覆盖。 */
+  /** 托管模式的数据目录；默认 Electron userData，可用 PERSONAL_AGENT_DATA_DIR 覆盖。不要与 CLI 的 ~/.personal-agent 共用。 */
   dataDir?: string;
 }
 
-export function defaultDataDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
-  return resolve(env.PERSONAL_AGENT_DATA_DIR || join(home, '.personal-agent'));
+/** 托管模式默认用 Electron userData，避免与正在运行的 `npm run dev`（~/.personal-agent）抢实例锁。 */
+export function defaultDataDir(env: NodeJS.ProcessEnv = process.env, userData?: string, home = homedir()): string {
+  if (env.PERSONAL_AGENT_DATA_DIR) return resolve(env.PERSONAL_AGENT_DATA_DIR);
+  if (userData) return resolve(userData);
+  return resolve(join(home, '.personal-agent'));
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = { mode: 'managed', connectUrl: DEFAULT_CONNECT_URL };

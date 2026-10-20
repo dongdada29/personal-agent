@@ -6,7 +6,7 @@ import {
   parseWindowsProcessTable, quoteWindowsArg, resolveWindowsCommand, terminateWindowsIdentities, windowsCommandLineToArgv,
   windowsDescendants, windowsOwnerCommandMatches, windowsProcessQueryScript, type WindowsProcessRow,
 } from '../src/process-windows.js';
-import { classifyWindowsOwner, ownedProcessSpawnOptions, processOwnerWrapperPath, recoverOwnedProcesses, spawnOwnedProcess,
+import { classifyWindowsOwner, ownedProcessSpawnOptions, ownerReadyDeadlineMs, processOwnerWrapperPath, recoverOwnedProcesses, spawnOwnedProcess,
   verifyProcessOwner, type OwnedProcessRecord } from '../src/process-registry.js';
 
 const EXEC = 'C:\\Program Files\\nodejs\\node.exe';
@@ -53,6 +53,8 @@ describe('Windows process table', () => {
 
   it('only embeds numeric PID filters in the query script', () => {
     expect(windowsProcessQueryScript([12, 34])).toContain('-Filter "ProcessId=12 OR ProcessId=34"');
+    expect(windowsProcessQueryScript([12])).toContain('-Property ProcessId,ParentProcessId,CreationDate,CommandLine');
+    expect(windowsProcessQueryScript([12])).toContain('-OperationTimeoutSec 5');
     expect(windowsProcessQueryScript()).not.toContain('-Filter');
     expect(windowsProcessQueryScript()).toContain('-InputObject $rows');
   });
@@ -115,6 +117,8 @@ describe('Windows owner spawn options', () => {
       detached: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
     });
     expect(ownedProcessSpawnOptions('darwin').stdio[3]).toBe('pipe');
+    expect(ownerReadyDeadlineMs('win32')).toBe(15_000);
+    expect(ownerReadyDeadlineMs('linux')).toBe(3_000);
   });
 });
 

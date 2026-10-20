@@ -20,7 +20,7 @@ import type { CommandRunner } from './command.js';
 import { findExecutable, commandEnvironment } from './command.js';
 import { BOX_REMOTE_SECCOMP_PATH } from './assets.js';
 import type { BoxStore, CloudDeploymentRecord } from './box-store.js';
-import { BOX_NAMES, BOX_QUOTA, BoxError, DockerBox, containerActions, type BoxSnapshot, type DesktopOp, type HostAdapter } from './host-adapter.js';
+import { BOX_NAMES, BOX_QUOTA, BoxError, DockerBox, containerActions, type BoxNames, type BoxSnapshot, type DesktopOp, type HostAdapter } from './host-adapter.js';
 import { parseLinuxMemoryPressure, parseSingleVersion } from './parsers.js';
 
 /** 心跳超过该时长视为离线。守护进程默认每 15 秒一次。 */
@@ -138,7 +138,7 @@ export class CloudAgentAdapter implements HostAdapter {
   readonly id = 'cloud-agent' as const;
   readonly kind = 'cloud' as const;
   constructor(private readonly deploymentId: string, private readonly store: BoxStore, private readonly broker: AgentBroker,
-    private readonly now: () => number = Date.now) {}
+    private readonly now: () => number = Date.now, private readonly names: BoxNames = BOX_NAMES) {}
 
   private record(): CloudDeploymentRecord {
     const record = this.store.get(this.deploymentId);
@@ -152,7 +152,7 @@ export class CloudAgentAdapter implements HostAdapter {
 
   async status(): Promise<BoxSnapshot> {
     const record = this.record();
-    const name = BOX_NAMES.container;
+    const name = this.names.container;
     const blank = { container: { state: 'unknown' as const, name }, desktops: [], gateReady: false, memoryPressure: 'unknown' as const };
     if (!record.registeredAt) {
       return { ...blank, host: { state: 'pending_registration', detail: '等待主机守护进程使用一次性票据注册。', installHint: 'scripts/box/install-cloud-host.sh --server <URL> --ticket-file <文件>' } };
@@ -209,9 +209,9 @@ export class CloudSshAdapter implements HostAdapter {
   readonly id = 'cloud-ssh' as const;
   readonly kind = 'cloud' as const;
   private readonly docker: DockerBox;
-  constructor(private readonly target: string, private readonly run: CommandRunner) {
+  constructor(private readonly target: string, private readonly run: CommandRunner, private readonly names: BoxNames = BOX_NAMES) {
     // 远端 docker CLI 读取远端主机上的 seccomp 文件（由 install-cloud-host.sh 安装）。
-    this.docker = new DockerBox(run, args => sshInvocation(target, ['docker', ...args]), { seccompProfile: () => BOX_REMOTE_SECCOMP_PATH });
+    this.docker = new DockerBox(run, args => sshInvocation(target, ['docker', ...args]), { seccompProfile: () => BOX_REMOTE_SECCOMP_PATH, names });
   }
 
   private async memoryPressure(): Promise<BoxMemoryPressure> {
@@ -223,7 +223,7 @@ export class CloudSshAdapter implements HostAdapter {
   async status(): Promise<BoxSnapshot> {
     const [file, args] = sshInvocation(this.target, ['docker', 'version', '--format', '{{.Server.Version}}']);
     const version = await this.run(file, args, { timeoutMs: 20_000 });
-    const name = BOX_NAMES.container;
+    const name = this.names.container;
     const blank = { container: { state: 'unknown' as const, name }, desktops: [], gateReady: false, memoryPressure: 'unknown' as const };
     if (version.notFound) return { ...blank, host: { state: 'not_installed', detail: '本机未找到 ssh 客户端。' } };
     if (version.code === 255 || version.timedOut) return { ...blank, host: { state: 'offline', detail: 'ssh 连接失败（检查 ssh 配置中的 Host 别名与密钥，需免交互登录）。' } };

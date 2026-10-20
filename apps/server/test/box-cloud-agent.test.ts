@@ -90,10 +90,10 @@ describe('cloud agent end to end: ticket registration, heartbeat, long-poll desk
         if (args[0] === 'version') return { code: 0, stdout: '27.5.1\n', stderr: '' };
         if (args[0] === 'inspect') return { code: 0, stdout: safeInspect(), stderr: '' };
         if (args[0] === 'stats') return { code: 0, stdout: '{"CPUPerc":"2.0%","MemUsage":"500MiB / 3.5GiB"}', stderr: '' };
-        if (line === 'exec pa-box /usr/local/sbin/pa-box-ctl status') {
+        if (line === `exec ${hostd.NAMES.container} /usr/local/sbin/pa-box-ctl status`) {
           return { code: 0, stdout: JSON.stringify({ v: 1, max: 3, desktops: ['d1', 'd2', 'd3'].map(id => ({ id, running: running.has(id) })) }), stderr: '' };
         }
-        if (line.startsWith('exec -i pa-box /usr/local/sbin/pa-box-ctl start')) {
+        if (line.startsWith(`exec -i ${hostd.NAMES.container} /usr/local/sbin/pa-box-ctl start`)) {
           tokens.set(args.at(-1)!, options.input!.trim());
           running.add(args.at(-1)!);
           return { code: 0, stdout: '', stderr: '' };
@@ -119,7 +119,7 @@ describe('cloud agent end to end: ticket registration, heartbeat, long-poll desk
     expect(echoed.toString()).toBe('ping');
     // 令牌经长轮询下发、经 stdin 交给 pa-box-ctl；网关收到的前导与之一致，令牌从不出现在 docker 参数里。
     const startCall = dockerCalls.find(call => call.args.includes('start') && call.args.includes('d1'))!;
-    expect(startCall.args).toEqual(['exec', '-i', 'pa-box', '/usr/local/sbin/pa-box-ctl', 'start', 'd1']);
+    expect(startCall.args).toEqual(['exec', '-i', hostd.NAMES.container, '/usr/local/sbin/pa-box-ctl', 'start', 'd1']);
     expect(preambles[0]).toBe(`PA-BOX-GATE 1 d1 ${startCall.input!.trim()}`);
     expect(dockerCalls.some(call => call.args.some(arg => arg.includes(startCall.input!.trim())))).toBe(false);
     ws.close();

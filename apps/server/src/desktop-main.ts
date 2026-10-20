@@ -54,7 +54,8 @@ process.on('message', (raw: unknown) => {
   }
   starting = (async () => {
     try {
-      server = await startDesktopServer({ token, dataDir: resolve(dataDir ?? process.env.PERSONAL_AGENT_DATA_DIR ?? `${homedir()}/.personal-agent`) });
+      // 数据目录必须由 Electron 主进程传入（默认 userData）。这里不再回落到 ~/.personal-agent，以免与 CLI 实例撞锁。
+      server = await startDesktopServer({ token, dataDir: resolve(dataDir ?? process.env.PERSONAL_AGENT_DATA_DIR ?? `${homedir()}/.personal-agent-desktop`) });
       await send({ type: 'ready', port: server.port });
     } catch (error) {
       await send({ type: 'error', code: errorCode(error) });

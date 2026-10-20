@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CommandOptions, CommandResult, CommandRunner } from '../src/box/command.js';
 import { commandEnvironment } from '../src/box/command.js';
-import { BOX_QUOTA, BoxError, boxRunArgs } from '../src/box/host-adapter.js';
+import { BOX_NAMES, BOX_QUOTA, BoxError, boxRunArgs, resolveBoxNames } from '../src/box/host-adapter.js';
 import { ColimaAdapter, LinuxContainerAdapter, Wsl2Adapter, colimaStartArgs } from '../src/box/local-adapters.js';
 import { CloudSshAdapter, sshInvocation } from '../src/box/cloud-adapters.js';
 import { safeInspect } from './fixtures/box.js';
@@ -21,6 +21,7 @@ function fakeRunner(responder: Responder): { run: CommandRunner; calls: Call[] }
 }
 
 const ok = (stdout = ''): Partial<CommandResult> => ({ code: 0, stdout });
+const CONTAINER = BOX_NAMES.container;
 const token = 'A'.repeat(43);
 const ctlStatus = '{"v":1,"max":3,"desktops":[{"id":"d1","running":false},{"id":"d2","running":false},{"id":"d3","running":false}]}';
 const paBoxRunning = '{"name":"pa-box","status":"Running","arch":"aarch64","cpus":2,"memory":4294967296,"disk":42949672960,"runtime":"docker"}';
@@ -36,10 +37,10 @@ function healthyMac(overrides: Responder = () => undefined) {
     if (line === '/usr/sbin/sysctl -n kern.memorystatus_vm_pressure_level') return ok('1\n');
     if (line === 'docker context show') return ok('orbstack\n');
     if (line === 'colima stop pa-box') return ok();
-    if (line.startsWith('docker --context colima-pa-box inspect pa-box')) return ok(safeInspect());
+    if (line.startsWith(`docker --context colima-pa-box inspect ${CONTAINER}`)) return ok(safeInspect());
     if (line.startsWith('docker --context colima-pa-box stats')) return ok('{"CPUPerc":"1.5%","MemUsage":"472MiB / 3.5GiB"}');
-    if (line === 'docker --context colima-pa-box exec pa-box /usr/local/sbin/pa-box-ctl status') return ok(ctlStatus);
-    if (line.startsWith('docker --context colima-pa-box exec -i pa-box /usr/local/sbin/pa-box-ctl start')) return ok();
+    if (line === `docker --context colima-pa-box exec ${CONTAINER} /usr/local/sbin/pa-box-ctl status`) return ok(ctlStatus);
+    if (line.startsWith(`docker --context colima-pa-box exec -i ${CONTAINER} /usr/local/sbin/pa-box-ctl start`)) return ok();
     if (line.startsWith('/usr/sbin/lsof')) return ok('p1\nn127.0.0.1:47830\n');
     return undefined;
   });
@@ -109,25 +110,33 @@ describe('Colima adapter (macOS)', () => {
     expect(pairs('-p')).toEqual(['127.0.0.1:47830:6080']);
     expect(pairs('-v')).toEqual(['pa-box-home:/home']);
     expect(args).not.toContain('--privileged');
+    expect(args[args.indexOf('--name') + 1]).toBe(CONTAINER);
     expect(args.some(arg => /no-sandbox|cap-add|docker\.sock/.test(arg))).toBe(false);
     expect(() => boxRunArgs({ seccompProfile: '' })).toThrow(BoxError);
+  });
+
+  it('uses a configurable container name so an existing pa-box does not block start', () => {
+    expect(CONTAINER).toBe('pa-box-desktop');
+    expect(resolveBoxNames({ PA_BOX_CONTAINER: 'pa-box-other' }).container).toBe('pa-box-other');
+    expect(boxRunArgs({ seccompProfile: '/x', names: resolveBoxNames({}, { container: 'team-box' }) })).toContain('team-box');
+    expect(() => resolveBoxNames({ PA_BOX_CONTAINER: '-evil' })).toThrow(BoxError);
   });
 
   it('verifies a freshly created container and deletes it if the publish is not loopback-only', async () => {
     let created = false;
     const { run, calls } = healthyMac((file, args) => {
       const line = args.join(' ');
-      if (line.startsWith('--context colima-pa-box inspect pa-box')) {
-        return created ? ok(safeInspect({}, { PortBindings: { '6080/tcp': [{ HostIp: '0.0.0.0', HostPort: '47830' }] } })) : { code: 1, stderr: 'Error: No such object: pa-box' };
+      if (line.startsWith(`--context colima-pa-box inspect ${CONTAINER}`)) {
+        return created ? ok(safeInspect({}, { PortBindings: { '6080/tcp': [{ HostIp: '0.0.0.0', HostPort: '47830' }] } })) : { code: 1, stderr: `Error: No such object: ${CONTAINER}` };
       }
       if (line.startsWith('--context colima-pa-box image inspect')) return ok('sha256:abc');
       if (line.startsWith('--context colima-pa-box run')) { created = true; return ok('id'); }
-      if (line.startsWith('--context colima-pa-box rm -f pa-box')) return ok();
+      if (line.startsWith(`--context colima-pa-box rm -f ${CONTAINER}`)) return ok();
       return undefined;
     });
     const adapter = new ColimaAdapter({ run, seccompProfile: () => '/opt/pa/pa-box-seccomp.json' });
     await expect(adapter.perform('start_container')).rejects.toMatchObject({ code: 'BOX_CONTAINER_UNSAFE' });
-    expect(calls.some(call => call.args.join(' ') === '--context colima-pa-box rm -f pa-box')).toBe(true);
+    expect(calls.some(call => call.args.join(' ') === `--context colima-pa-box rm -f ${CONTAINER}`)).toBe(true);
     // 只删除容器，不删除卷或镜像。
     expect(calls.some(call => call.args.includes('volume') || call.args.includes('rmi'))).toBe(false);
   });
@@ -152,7 +161,7 @@ describe('Colima adapter (macOS)', () => {
     const { run, calls } = healthyMac();
     await new ColimaAdapter({ run, seccompProfile: () => '/x' }).desktop('start', 'd2', token);
     const call = calls.find(item => item.args.includes('pa-box-ctl') || item.args.includes('/usr/local/sbin/pa-box-ctl'))!;
-    expect(call.args).toEqual(['--context', 'colima-pa-box', 'exec', '-i', 'pa-box', '/usr/local/sbin/pa-box-ctl', 'start', 'd2']);
+    expect(call.args).toEqual(['--context', 'colima-pa-box', 'exec', '-i', CONTAINER, '/usr/local/sbin/pa-box-ctl', 'start', 'd2']);
     expect(call.options?.input).toBe(`${token}\n`);
     expect(calls.some(item => item.args.some(arg => arg.includes(token)))).toBe(false);
   });
@@ -160,11 +169,11 @@ describe('Colima adapter (macOS)', () => {
   it('stops the container and refuses streaming if the host listens on a non-loopback address', async () => {
     const { run, calls } = healthyMac((file, args) => {
       if (file === '/usr/sbin/lsof') return ok('p1\nn127.0.0.1:47830\nn*:47830\n');
-      if (args.join(' ') === '--context colima-pa-box stop --time 20 pa-box') return ok();
+      if (args.join(' ') === `--context colima-pa-box stop --time 20 ${CONTAINER}`) return ok();
       return undefined;
     });
     await expect(new ColimaAdapter({ run, seccompProfile: () => '/x' }).openGate()).rejects.toMatchObject({ code: 'BOX_PORT_EXPOSED' });
-    expect(calls.some(call => call.args.join(' ') === '--context colima-pa-box stop --time 20 pa-box')).toBe(true);
+    expect(calls.some(call => call.args.join(' ') === `--context colima-pa-box stop --time 20 ${CONTAINER}`)).toBe(true);
   });
 
   it('reports not installed and not configured states gracefully', async () => {
@@ -189,7 +198,7 @@ describe('WSL2, Linux and SSH adapters', () => {
       const line = [file, ...args].join(' ');
       if (line === 'wsl.exe -l -v') return ok('  NAME      STATE           VERSION\n* Ubuntu    Stopped         2\n  pa-box    Running         2\n');
       if (line.startsWith('wsl.exe -d pa-box --exec docker inspect')) return ok(safeInspect());
-      if (line.startsWith('wsl.exe -d pa-box --exec docker exec pa-box')) return ok(ctlStatus);
+      if (line.startsWith(`wsl.exe -d pa-box --exec docker exec ${CONTAINER}`)) return ok(ctlStatus);
       if (line === 'wsl.exe -d pa-box --exec cat /proc/pressure/memory') return ok('some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n');
       return undefined;
     });
@@ -227,7 +236,7 @@ describe('WSL2, Linux and SSH adapters', () => {
       "docker inspect pa-box --format '{{json .}}'"]]);
     const { run, calls } = fakeRunner(() => ok());
     await new CloudSshAdapter('pa-cloud', run).desktop('start', 'd1', token);
-    expect(calls[0].args.at(-1)).toBe('docker exec -i pa-box /usr/local/sbin/pa-box-ctl start d1');
+    expect(calls[0].args.at(-1)).toBe(`docker exec -i ${CONTAINER} /usr/local/sbin/pa-box-ctl start d1`);
     expect(calls[0].options?.input).toBe(`${token}\n`);
   });
 

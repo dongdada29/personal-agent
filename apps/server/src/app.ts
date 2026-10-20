@@ -29,8 +29,28 @@ export interface AppOptions {
    * 与 paired security、demo 互斥（由 installAccessControl 校验）。
    */
   desktop?: { token: string };
-  /** Linux 云电脑（box）服务的覆盖项（测试注入假的适配器 / runner）；false 表示不启用。demo 实例始终不启用真实 box。 */
+  /**
+   * Linux 云电脑（box）。默认关闭：不构造 BoxService、不挂载 `/api/box/*`（含 agent register/heartbeat/poll）。
+   * - `false`：强制关闭；
+   * - 对象：显式开启（测试注入适配器，或覆盖容器名等）；
+   * - 未传：桌面托管模式默认开启（可用 PERSONAL_AGENT_BOX=0 关掉）；CLI/loopback 需 PERSONAL_AGENT_BOX=1。
+   * demo 实例始终不启用真实 box。
+   */
   box?: Partial<Omit<BoxServiceOptions, 'dataDir'>> | false;
+}
+
+const BOX_ON = new Set(['1', 'true', 'on', 'yes']);
+const BOX_OFF = new Set(['0', 'false', 'off', 'no']);
+
+/** box 默认关闭；显式配置、桌面托管（除非 PERSONAL_AGENT_BOX=0）或 PERSONAL_AGENT_BOX=1 才启用。 */
+export function resolveBoxEnabled(options: Pick<AppOptions, 'box' | 'demo' | 'desktop'>, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (options.demo) return false;
+  if (options.box === false) return false;
+  if (options.box && typeof options.box === 'object') return true;
+  const flag = (env.PERSONAL_AGENT_BOX ?? '').trim().toLowerCase();
+  if (BOX_OFF.has(flag)) return false;
+  if (options.desktop) return true;
+  return BOX_ON.has(flag);
 }
 
 const demoFakeOnly = (message: string) => ({ code: 'DEMO_FAKE_ONLY', message });
@@ -78,8 +98,8 @@ export async function buildApp(options: AppOptions) {
     const app = Fastify({ logger: false, trustProxy: false, bodyLimit: 32_768,
       ajv: { customOptions: { coerceTypes: false, removeAdditional: false } } });
     initializingApp = app;
-    // demo 实例结构上不构造 BoxService：没有任何真实适配器、命令执行或桌面代理能力。
-    const box = demo || options.box === false ? undefined : new BoxService({ dataDir: options.dataDir, ...(options.box ?? {}) });
+    // demo / 未开启的实例结构上不构造 BoxService：没有任何真实适配器、命令执行、桌面代理或 agent 路由。
+    const box = resolveBoxEnabled(options) ? new BoxService({ dataDir: options.dataDir, ...(typeof options.box === 'object' ? options.box : {}) }) : undefined;
     initializingBox = box;
     app.addHook('onClose', async () => {
       try { box?.close(); } catch { /* box.sqlite 关闭失败不影响任务库的关闭 */ }
@@ -89,7 +109,11 @@ export async function buildApp(options: AppOptions) {
     const port = options.port ?? 47801;
     const access = installAccessControl(app, authStore, port, undefined, { demoPublicOrigin: demo?.publicOrigin, fakeOnlyDemo: demo !== undefined,
       ...(options.desktop ? { desktopToken: options.desktop.token } : {}) });
-    installBoxRoutes(app, { service: box, demo: demo !== undefined, authorizeUpgrade: access.authorizeUpgrade, requireActive: access.requireActive });
+    // 关闭时不挂载 /api/box/*（含 agent）；demo 仍挂载只读 fake 列表，但不挂 agent 端点。
+    if (box || demo) {
+      installBoxRoutes(app, { service: box, demo: demo !== undefined, agentRoutes: box !== undefined,
+        authorizeUpgrade: access.authorizeUpgrade, requireActive: access.requireActive });
+    }
     if (demo) {
       // 隧道后的访客都表现为 loopback 客户端，无法可靠区分来源，所以按实例全局限速；
       // 按访客限速请在 Cloudflare 侧配置。该 hook 在访问控制之后注册，只统计已放行的写请求。

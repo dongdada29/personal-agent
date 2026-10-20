@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadSettings, normalizeSettings, saveSettings } from '../src/config.js';
+import { defaultDataDir, loadSettings, normalizeSettings, saveSettings } from '../src/config.js';
 import { parseConnectUrl, probeInstance } from '../src/connect-mode.js';
 import { newLaunchToken, serverEnvironment, ServerSupervisor } from '../src/server-supervisor.js';
 
@@ -99,6 +99,12 @@ describe('connect mode and settings', () => {
     expect(await probeInstance(port)).toEqual({ ok: false, code: 'NOT_PERSONAL_AGENT' });
     await new Promise(done => servers.pop()!.close(done));
     expect(await probeInstance(port)).toEqual({ ok: false, code: 'UNREACHABLE' });
+  });
+
+  it('defaults managed data dir to Electron userData rather than ~/.personal-agent', () => {
+    expect(defaultDataDir({}, '/tmp/Electron User Data')).toBe(resolve('/tmp/Electron User Data'));
+    expect(defaultDataDir({ PERSONAL_AGENT_DATA_DIR: '/custom/data' }, '/tmp/Electron User Data')).toBe(resolve('/custom/data'));
+    expect(defaultDataDir({}, undefined, '/home/dev')).toBe(resolve('/home/dev', '.personal-agent'));
   });
 
   it('persists settings atomically and normalizes invalid values', () => {

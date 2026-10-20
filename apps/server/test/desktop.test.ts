@@ -62,6 +62,24 @@ describe('desktop token mode', () => {
     expect((await rawGet(server.port, '/', [['authorization', `Bearer ${token}`]])).status).toBe(404);
   });
 
+  it('enables box routes in managed mode and still requires the launch token', async () => {
+    const token = newToken();
+    const server = await startDesktopServer({ dataDir: join(tempDir(), 'data'), token, autoRun: false });
+    cleanups.push(() => server.close());
+    expect((await rawGet(server.port, '/api/box/deployments')).status).toBe(401);
+    expect((await rawGet(server.port, '/api/box/deployments', [['authorization', `Bearer ${token}`]])).status).toBe(200);
+    const agent = await server.app.inject({ method: 'POST', url: '/api/box/agent/register', payload: { ticket: 'A'.repeat(43) } });
+    expect(agent.statusCode).not.toBe(404);
+  });
+
+  it('does not mount /api/box when box is explicitly disabled', async () => {
+    const token = newToken();
+    const server = await startDesktopServer({ dataDir: join(tempDir(), 'data'), token, autoRun: false, box: false });
+    cleanups.push(() => server.close());
+    expect((await rawGet(server.port, '/api/box/deployments', [['authorization', `Bearer ${token}`]])).status).toBe(404);
+    expect((await server.app.inject({ method: 'POST', url: '/api/box/agent/register', payload: { ticket: 'A'.repeat(43) } })).statusCode).toBe(404);
+  });
+
   it('rejects malformed tokens and refuses to combine with paired access or demo mode', async () => {
     await expect(startDesktopServer({ dataDir: join(tempDir(), 'data'), token: 'short', autoRun: false, box: false }))
       .rejects.toMatchObject({ code: 'DESKTOP_CONFIG_INVALID' });

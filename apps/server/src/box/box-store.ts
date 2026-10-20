@@ -202,6 +202,7 @@ export class BoxStore {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* still close */ }
     this.db.close();
   }
 }

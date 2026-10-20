@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildApp } from '../src/app.js';
+import { buildApp, resolveBoxEnabled } from '../src/app.js';
 import { EngineError, type EngineAdapter } from '@personal-agent/runtime';
 
 const fixtures: { app: Awaited<ReturnType<typeof buildApp>>['app']; dir: string }[] = [];
@@ -98,5 +98,35 @@ describe('local phase 1 task API', () => {
     await runner.idle();
     expect((await app.inject('/api/health')).statusCode).toBe(503);
     expect((await app.inject({ method: 'POST', url: '/api/tasks', payload: { commandId: 'next', goal: 'Two' } })).statusCode).toBe(503);
+  });
+});
+
+describe('box routes are opt-in', () => {
+  it('resolves enablement from options, desktop mode and PERSONAL_AGENT_BOX', () => {
+    expect(resolveBoxEnabled({})).toBe(false);
+    expect(resolveBoxEnabled({ box: false })).toBe(false);
+    expect(resolveBoxEnabled({ box: {} })).toBe(true);
+    expect(resolveBoxEnabled({ demo: { mode: 'fake' }, box: {} })).toBe(false);
+    expect(resolveBoxEnabled({ desktop: { token: 'T'.repeat(43) } })).toBe(true);
+    expect(resolveBoxEnabled({ desktop: { token: 'T'.repeat(43) } }, { PERSONAL_AGENT_BOX: '0' })).toBe(false);
+    expect(resolveBoxEnabled({}, { PERSONAL_AGENT_BOX: '1' })).toBe(true);
+  });
+
+  it('does not mount /api/box including agent endpoints unless enabled', async () => {
+    const { app } = await fixture();
+    expect((await app.inject('/api/box/deployments')).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: '/api/box/agent/register', payload: { ticket: 'A'.repeat(43) } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: '/api/box/agent/heartbeat', payload: { snapshot: {} } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: '/api/box/agent/poll', payload: {} })).statusCode).toBe(404);
+  });
+
+  it('mounts box routes when box options are provided', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'personal-agent-api-'));
+    const result = await buildApp({ dataDir: dir, autoRun: false, webRoot: join(dir, 'no-web-build'),
+      box: { localAdapter: null, sweepIntervalMs: 0 } });
+    fixtures.push({ app: result.app, dir });
+    expect((await result.app.inject('/api/box/deployments')).statusCode).toBe(200);
+    expect((await result.app.inject({ method: 'POST', url: '/api/box/agent/register', payload: { ticket: 'A'.repeat(43) } })).statusCode).toBeGreaterThanOrEqual(400);
+    expect((await result.app.inject({ method: 'POST', url: '/api/box/agent/register', payload: { ticket: 'A'.repeat(43) } })).statusCode).not.toBe(404);
   });
 });
