@@ -74,7 +74,8 @@ describe('read-only diagnostics and cold data backups', () => {
     const { data, output, task } = fixture(); writeFileSync(join(data, 'evidence.txt'), 'retained evidence'); mkdirSync(join(data, 'empty-artifact-directory'));
     const original = readFileSync(join(data, 'personal-agent.sqlite'));
     expect(coldBackup(data, output)).toMatchObject({ result: 'PASS', schemaVersion: 4, restoreScope: 'same-host', sourceDataPreserved: true });
-    expect(statSync(output).mode & 0o777).toBe(0o700);
+    // NTFS 忽略 mkdir mode；POSIX 上备份目录必须是 0700。
+    if (process.platform !== 'win32') expect(statSync(output).mode & 0o777).toBe(0o700);
     expect(existsSync(join(data, 'service.lock'))).toBe(false);
     expect(readFileSync(join(data, 'personal-agent.sqlite'))).toEqual(original);
     const manifest = JSON.parse(readFileSync(join(output, 'backup-manifest.json'), 'utf8')) as { files: { path: string; sha256: string }[] };

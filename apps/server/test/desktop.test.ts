@@ -5,6 +5,7 @@ import { request } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { assertLoopbackAddress, startDesktopServer } from '../src/desktop.js';
@@ -50,7 +51,7 @@ describe('desktop token mode', () => {
     const ok = await rawGet(server.port, '/api/health', [['authorization', `Bearer ${token}`]]);
     expect(ok.status).toBe(200);
     // 401 响应体只给错误码，绝不回显令牌。
-    const denied = await rawGet(server.port, '/api/session', [['authorization', `Bearer ${token.slice(0, -1)}A`]]);
+    const denied = await rawGet(server.port, '/api/session', [['authorization', `Bearer ${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`]]);
     expect(denied.body).toContain('DESKTOP_TOKEN_REQUIRED');
     expect(denied.body).not.toContain(token.slice(0, 20));
     const session = await rawGet(server.port, '/api/session', [['authorization', `Bearer ${token}`]]);
@@ -84,7 +85,8 @@ describe('desktop token mode', () => {
 });
 
 describe('desktop-main IPC entry', () => {
-  const entry = join(import.meta.dirname, '..', 'src', 'desktop-main.ts');
+  const entryPath = join(import.meta.dirname, '..', 'src', 'desktop-main.ts');
+  const entry = process.platform === 'win32' ? pathToFileURL(entryPath).href : entryPath;
   const tsx = createRequire(import.meta.url).resolve('tsx');
   function launch() {
     const child = fork(entry, [], { execArgv: ['--import', tsx], stdio: ['ignore', 'pipe', 'pipe', 'ipc'],

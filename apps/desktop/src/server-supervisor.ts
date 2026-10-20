@@ -1,6 +1,7 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { pathToFileURL } from 'node:url';
 
 /**
  * 托管模式：用 Electron 自带的 Node（ELECTRON_RUN_AS_NODE=1）fork 打包后的 server，
@@ -62,7 +63,10 @@ export class ServerSupervisor extends EventEmitter {
     if (this.state !== 'idle') return Promise.reject(new ServerStartError('DESKTOP_SUPERVISOR_STATE', 'Server was already started'));
     this.state = 'starting';
     const forkImpl = this.options.forkImpl ?? fork;
-    const child = forkImpl(this.options.entry, [], {
+    // Windows ESM loader 拒绝 `D:\...` 作为模块路径，必须是 file:// URL。
+    const entry = process.platform === 'win32' && !/^[a-z][a-z0-9+.-]*:/iu.test(this.options.entry)
+      ? pathToFileURL(this.options.entry).href : this.options.entry;
+    const child = forkImpl(entry, [], {
       execPath: this.options.execPath ?? process.execPath,
       execArgv: this.options.execArgv ?? [],
       env: serverEnvironment(this.options.baseEnv ?? process.env),

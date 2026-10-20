@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -37,16 +37,18 @@ function pair(auth: AuthStore, name = 'Test device') {
 
 async function exchangeWorker(filename: string, now: number) {
   // Test credentials travel over private IPC, never through argv or stdout.
-  const script = `import { AuthStore } from ${JSON.stringify(authModuleUrl)};
-    const auth = new AuthStore(process.argv[1], { now: () => Number(process.argv[2]) });
+  // Windows 上 `--eval` 多行脚本的引号会被 CommandLineToArgvW 拆坏，改写成临时模块。
+  const script = join(filename, `..`, `exchange-worker-${process.pid}-${Math.random().toString(16).slice(2)}.mjs`);
+  writeFileSync(script, `import { AuthStore } from ${JSON.stringify(authModuleUrl)};
+    const auth = new AuthStore(process.argv[2], { now: () => Number(process.argv[3]) });
     process.send({ ready: true });
     process.once('message', ({ ticket }) => {
       try { const result = auth.exchangeTicket(ticket, 'Concurrent test device');
         process.send({ ok: true, deviceId: result.device.id }); }
       catch (error) { process.send({ ok: false, code: error.code }); }
       finally { auth.close(); process.disconnect(); }
-    });`;
-  const child = spawn(process.execPath, ['--import', loader, '--input-type=module', '--eval', script, filename, String(now)],
+    });`);
+  const child = spawn(process.execPath, ['--import', loader, script, filename, String(now)],
     { env: { PATH: process.env.PATH }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   children.push(child);
   const exit = new Promise<void>(resolve => child.once('exit', () => resolve()));

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { methods, PROTOCOL_VERSION, type ToolCallUpdate } from '@agentclientprotocol/sdk';
 import { createFakeEngineAdapter } from '../src/engine-fake.js';
@@ -13,6 +13,7 @@ import type { OwnedProcessRecord } from '../src/process-registry.js';
 import { processRunning as processAlive } from './helpers/process-observation.js';
 
 const fixture = fileURLToPath(new URL('../src/engine-fake-fixture.ts', import.meta.url));
+const fixtureSpecifier = process.platform === 'win32' ? pathToFileURL(fixture).href : fixture;
 const loader = createRequire(import.meta.url).resolve('tsx');
 let cwd: string;
 let context: EngineRunContext;
@@ -129,7 +130,7 @@ describe('stdio ACP engine adapter', () => {
   it('registers a stable engine owner before launching the ACP child and records closure after group exit', async () => {
     const marker = join(cwd, 'child-started');
     const bootstrap = join(cwd, 'bootstrap.mjs');
-    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixture)});`);
+    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixtureSpecifier)});`);
     const entered = deferred<void>(), release = deferred<void>();
     const records: OwnedProcessRecord[] = [];
     const opening = open({ args: ['--import', loader, bootstrap] }, {
@@ -153,7 +154,7 @@ describe('stdio ACP engine adapter', () => {
   it('cleans startup ownership persistence failure before returning EVENT_FAILURE without launching its child', async () => {
     const marker = join(cwd, 'must-not-run');
     const bootstrap = join(cwd, 'bootstrap.mjs');
-    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixture)});`);
+    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixtureSpecifier)});`);
     let owner: OwnedProcessRecord | undefined;
     const onProcessEnd = vi.fn();
     const error = await open({ args: ['--import', loader, bootstrap] }, {
@@ -169,7 +170,7 @@ describe('stdio ACP engine adapter', () => {
   it('cannot launch a child when startup cancellation interrupts pending owner persistence', async () => {
     const marker = join(cwd, 'must-not-run');
     const bootstrap = join(cwd, 'bootstrap.mjs');
-    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixture)});`);
+    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixtureSpecifier)});`);
     const entered = deferred<void>(), release = deferred<void>(), closed = deferred<OwnedProcessRecord>();
     const controller = new AbortController();
     context.signal = controller.signal;

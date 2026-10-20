@@ -23,7 +23,8 @@ export function inspectShareFile(path: string, content: string): { path: string;
 
 export function checkShare() {
   const git = (args: string[]) => execFileSync('git', ['-C', projectDir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-    env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }, timeout: 10_000 });
+    env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }, timeout: 10_000 });
   const files = git(['ls-files', '-z']).split('\0').filter(Boolean);
   const findings = files.flatMap(path => {
     const info = lstatSync(join(projectDir, path));

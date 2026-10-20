@@ -40,6 +40,20 @@ const UUID = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const supported = () => process.platform === 'darwin' || process.platform === 'linux' || process.platform === 'win32';
 const isWindows = () => process.platform === 'win32';
 
+/**
+ * POSIX：detached 进程组 + fd 3 匿名管道作启动闸门。
+ * Windows：不能依赖进程组；detached:true 还会让额外 stdio 句柄无法继承，
+ * net.Socket({ fd: 3 }) 永远等不到 READY。改用 Node IPC（同样不占用 stdout/stderr）。
+ */
+export function ownedProcessSpawnOptions(platform: NodeJS.Platform = process.platform): {
+  detached: boolean; windowsHide: boolean; stdio: ['pipe', 'pipe', 'pipe', 'pipe' | 'ipc']; serialization?: 'json';
+} {
+  if (platform === 'win32') {
+    return { detached: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe', 'ipc'], serialization: 'json' };
+  }
+  return { detached: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] };
+}
+
 /** Windows 查询与结束进程的实现；测试可替换为假的进程表。 */
 export const windowsProcessOps: { query: WindowsQuery; kill: TaskkillRunner } = { query: queryWindowsProcesses, kill: taskkillTree };
 
@@ -151,11 +165,14 @@ export function spawnOwnedProcess(options: {
   // Electron 托管模式下 process.execPath 是 Electron 本体：owner 必须以 Node 方式运行，
   // 否则会拉起一个新的 GUI 实例。owner 再决定子进程是否保留该开关（见 process-owner.mjs）。
   if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
+  const windows = isWindows();
+  const spawnOptions = ownedProcessSpawnOptions();
+  // 显式开关，避免从 vitest/Electron 继承到的 process.send 被误当成闸门。
+  if (spawnOptions.stdio[3] === 'ipc') env.PERSONAL_AGENT_OWNER_IPC = '1';
   const child = spawn(process.execPath, [processOwnerWrapperPath, `--personal-agent-owner=${id}`], {
-    cwd: options.cwd, env, shell: false, detached: true, windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
+    cwd: options.cwd, env, shell: false, ...spawnOptions,
   }) as unknown as ChildProcessWithoutNullStreams;
-  const gate = child.stdio[3] as Duplex;
+  const gate = windows ? undefined : child.stdio[3] as Duplex;
   const record: OwnedProcessRecord = { id, ...options.context, pid: child.pid ?? -1, pgid: child.pid ?? -1,
     wrapperPath: processOwnerWrapperPath, startedAt: new Date().toISOString(), status: 'active', kind: options.kind };
   let control = '', closing = false, readyResolved = false, released = false;
@@ -166,33 +183,47 @@ export function spawnOwnedProcess(options: {
   let resolveExit!: (value: OwnedProcessExit) => void;
   const exited = new Promise<OwnedProcessExit>(resolve => { resolveExit = resolve; });
   let exitReported = false;
-  gate.on('error', () => { /* startup or child exit reports a fixed failure */ });
-  gate.on('data', (chunk: Buffer) => {
-    control += chunk.toString('utf8');
-    if (control.length > 8192) { rejectReady(new EngineError('ENGINE_FAILED', 'Process owner emitted invalid control data.')); gate.destroy(); return; }
-    let newline: number;
-    while ((newline = control.indexOf('\n')) >= 0) {
-      const line = control.slice(0, newline); control = control.slice(newline + 1);
-      let value: unknown;
-      try { value = JSON.parse(line); } catch { rejectReady(new EngineError('ENGINE_FAILED', 'Process owner control data is invalid.')); continue; }
-      if (typeof value !== 'object' || value === null) continue;
-      const event = value as Record<string, unknown>;
-      if (event.type === 'READY') { readyResolved = true; resolveReady(); }
-      if (event.type === 'CHILD' && isWindows() && Number.isSafeInteger(event.pid) && (event.pid as number) > 0 && !childIdentity) {
-        // 立即记录直接子进程的创建时间：它退出后其孤儿子孙仍以它的 PID 为 ParentProcessId。
-        const pid = event.pid as number;
-        childIdentity = windowsProcessOps.query([pid]).then(rows => {
-          const row = rows.find(item => item.pid === pid && item.ppid === record.pid && item.created !== null);
-          return row ? { pid, created: row.created! } : undefined;
-        }, () => undefined);
-      }
-      if (event.type === 'EXIT' && (event.exitCode === null || Number.isInteger(event.exitCode)) && (event.signal === null || typeof event.signal === 'string')) {
-        exitReported = true;
-        resolveExit({ exitCode: event.exitCode as number | null, signal: event.signal as NodeJS.Signals | null,
-          ...(typeof event.spawnError === 'string' ? { spawnError: event.spawnError } : {}) });
-      }
+  const destroyGate = () => {
+    if (windows) {
+      try { if (child.connected) child.disconnect(); } catch { /* already disconnected */ }
+      return;
     }
-  });
+    gate!.destroy();
+  };
+  const acceptControl = (value: unknown) => {
+    if (typeof value !== 'object' || value === null) return;
+    const event = value as Record<string, unknown>;
+    if (event.type === 'READY') { readyResolved = true; resolveReady(); }
+    if (event.type === 'CHILD' && windows && Number.isSafeInteger(event.pid) && (event.pid as number) > 0 && !childIdentity) {
+      // 立即记录直接子进程的创建时间：它退出后其孤儿子孙仍以它的 PID 为 ParentProcessId。
+      const pid = event.pid as number;
+      childIdentity = windowsProcessOps.query([pid]).then(rows => {
+        const row = rows.find(item => item.pid === pid && item.ppid === record.pid && item.created !== null);
+        return row ? { pid, created: row.created! } : undefined;
+      }, () => undefined);
+    }
+    if (event.type === 'EXIT' && (event.exitCode === null || Number.isInteger(event.exitCode)) && (event.signal === null || typeof event.signal === 'string')) {
+      exitReported = true;
+      resolveExit({ exitCode: event.exitCode as number | null, signal: event.signal as NodeJS.Signals | null,
+        ...(typeof event.spawnError === 'string' ? { spawnError: event.spawnError } : {}) });
+    }
+  };
+  if (windows) {
+    child.on('message', acceptControl);
+  } else {
+    gate!.on('error', () => { /* startup or child exit reports a fixed failure */ });
+    gate!.on('data', (chunk: Buffer) => {
+      control += chunk.toString('utf8');
+      if (control.length > 8192) { rejectReady(new EngineError('ENGINE_FAILED', 'Process owner emitted invalid control data.')); destroyGate(); return; }
+      let newline: number;
+      while ((newline = control.indexOf('\n')) >= 0) {
+        const line = control.slice(0, newline); control = control.slice(newline + 1);
+        let value: unknown;
+        try { value = JSON.parse(line); } catch { rejectReady(new EngineError('ENGINE_FAILED', 'Process owner control data is invalid.')); continue; }
+        acceptControl(value);
+      }
+    });
+  }
   child.once('error', () => { rejectReady(new EngineError('ENGINE_FAILED', 'Process owner could not start.')); resolveExit({ exitCode: null, signal: null, spawnError: 'SPAWN_ERROR' }); });
   child.once('exit', (code, signal) => {
     if (!readyResolved) rejectReady(new EngineError('ENGINE_FAILED', 'Process owner exited before startup.'));
@@ -238,7 +269,7 @@ export function spawnOwnedProcess(options: {
       startPromise ??= (async () => {
         await bounded(ready, 3_000, new EngineError('ENGINE_FAILED', 'Process owner startup exceeded its deadline.'));
         if (closing || signal?.aborted) throw new EngineError('ABORTED', 'Process startup was cancelled.');
-        if (isWindows()) {
+        if (windows) {
           // 登记前先取得 owner 的创建时间并核对命令行；取不到就不放行命令（之后无法安全恢复）。
           let rows: WindowsProcessRow[] = [];
           try { rows = await bounded(windowsProcessOps.query([record.pid]), 10_000, new EngineError('ENGINE_FAILED', 'Process owner identity query timed out.')); } catch { /* 下方统一报错 */ }
@@ -255,18 +286,26 @@ export function spawnOwnedProcess(options: {
           throw new EngineError('ABORTED', 'Process startup was cancelled.');
         }
         released = true;
-        await new Promise<void>((resolve, reject) => gate.write(JSON.stringify({ type: 'START', command: options.command, args: options.args }) + '\n',
-          error => error ? reject(new EngineError('ENGINE_FAILED', 'Process startup gate could not be released.')) : resolve()));
+        await new Promise<void>((resolve, reject) => {
+          const fail = () => reject(new EngineError('ENGINE_FAILED', 'Process startup gate could not be released.'));
+          const payload = { type: 'START', command: options.command, args: options.args };
+          if (windows) {
+            try { child.send(payload, error => error ? fail() : resolve()); }
+            catch { fail(); }
+            return;
+          }
+          gate!.write(JSON.stringify(payload) + '\n', error => error ? fail() : resolve());
+        });
       })();
       return startPromise;
     },
     close() {
       closePromise ??= (async () => {
         closing = true;
-        if (!released) gate.destroy();
-        try { await (isWindows() ? closeWindowsTree() : terminateEngineProcessTree(child)); confirmGone(); }
+        if (!released) destroyGate();
+        try { await (windows ? closeWindowsTree() : terminateEngineProcessTree(child)); confirmGone(); }
         catch (error) { rejectGone(error); throw error; }
-        finally { gate.destroy(); }
+        finally { destroyGate(); }
         if (registered) await bounded(reportEnd(), 500, new EngineError('EVENT_FAILURE', 'Process closure persistence exceeded its deadline.'));
       })();
       return closePromise;

@@ -95,8 +95,11 @@ export async function runVerification(options: RunVerificationOptions): Promise<
     const resolved = resolveWindowsCommand(command, [...args], env);
     if (!resolved) {
       const finished = Date.now();
+      const missingPath = isAbsolute(command) || /[\\/]/u.test(command);
       return { command, args: [...args], exitCode: null, signal: null, stdout: '',
-        stderr: 'Verification command could not be started (ENOENT: not found on PATH, or a .cmd/.bat other than npm/npx).\n',
+        stderr: missingPath
+          ? 'Verification command could not be started (ENOENT).\n'
+          : 'Verification command could not be started (ENOENT: not found on PATH, or a .cmd/.bat other than npm/npx).\n',
         stdoutTruncated: false, stderrTruncated: false, timedOut: false, cancelled: false,
         startedAt: new Date(started).toISOString(), finishedAt: new Date(finished).toISOString(), durationMs: finished - started };
     }

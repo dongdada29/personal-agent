@@ -16,7 +16,7 @@ catch {
   await writeFile(join(directory, 'greet.js'), "export function greet(name) {\n  return `Hello, ${name}!`;\n}\n");
   await writeFile(join(directory, 'test', 'greet.test.js'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { greet } from '../greet.js';\ntest('normal name', () => assert.equal(greet('Ada'), 'Hello, Ada!'));\ntest('trim name', () => assert.equal(greet('  Ada  '), 'Hello, Ada!'));\ntest('empty name', () => assert.equal(greet('   '), 'Hello, Guest!'));\n");
   await writeFile(join(directory, 'README.md'), '# Safe fixture\n\nLocal, dependency-free greeting task. Two tests intentionally fail before the requested change.\n');
-  const args = ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false', '-c', 'user.name=Personal Agent Fixture', '-c', 'user.email=fixture@example.invalid'];
+  const args = ['-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`, '-c', 'commit.gpgSign=false', '-c', 'user.name=Personal Agent Fixture', '-c', 'user.email=fixture@example.invalid'];
   for (const command of [['init', '-b', 'main'], ['add', '.'], ['commit', '-m', 'test: preserve safe fixture baseline']]) {
     await run('git', [...args, ...command], { cwd: directory, env: verificationEnvironment() });
   }

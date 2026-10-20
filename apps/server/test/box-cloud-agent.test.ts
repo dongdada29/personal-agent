@@ -12,7 +12,8 @@ import { safeInspect } from './fixtures/box.js';
 
 const hostdPath = join(import.meta.dirname, '..', '..', '..', 'scripts', 'box', 'pa-box-hostd.mjs');
 // 守护进程是独立的无依赖脚本（部署到云主机），这里动态导入，避免把 .mjs 纳入类型检查。
-const loadHostd = (): Promise<any> => import(pathToFileURL(hostdPath).href);
+// @vite-ignore：否则 Vite 会把 Windows 路径内联进 import()，`\scripts` 里的 `\s` 变成非法转义。
+const loadHostd = (): Promise<any> => import(/* @vite-ignore */ pathToFileURL(hostdPath).href);
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });

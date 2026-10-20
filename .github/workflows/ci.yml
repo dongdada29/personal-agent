@@ -45,8 +45,8 @@ jobs:
       - name: Test
         env:
           PERSONAL_AGENT_SSE_REAL_SOCKETS: "1"
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_CONFIG_GLOBAL: ${{ runner.os == 'Windows' && 'NUL' || '/dev/null' }}
+          GIT_CONFIG_SYSTEM: ${{ runner.os == 'Windows' && 'NUL' || '/dev/null' }}
           GIT_CONFIG_NOSYSTEM: "1"
         run: npm test -- --maxWorkers=1 --minWorkers=1
 

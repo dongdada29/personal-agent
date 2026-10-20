@@ -6,8 +6,8 @@ import {
   parseWindowsProcessTable, quoteWindowsArg, resolveWindowsCommand, terminateWindowsIdentities, windowsCommandLineToArgv,
   windowsDescendants, windowsOwnerCommandMatches, windowsProcessQueryScript, type WindowsProcessRow,
 } from '../src/process-windows.js';
-import { classifyWindowsOwner, processOwnerWrapperPath, recoverOwnedProcesses, spawnOwnedProcess, verifyProcessOwner,
-  type OwnedProcessRecord } from '../src/process-registry.js';
+import { classifyWindowsOwner, ownedProcessSpawnOptions, processOwnerWrapperPath, recoverOwnedProcesses, spawnOwnedProcess,
+  verifyProcessOwner, type OwnedProcessRecord } from '../src/process-registry.js';
 
 const EXEC = 'C:\\Program Files\\nodejs\\node.exe';
 const WRAPPER = 'C:\\Users\\dev\\personal-agent\\packages\\runtime\\src\\process-owner.mjs';
@@ -103,6 +103,18 @@ describe('Windows process table', () => {
 
     // taskkill 失败而进程仍在：在期限后报告失败（调用方 fail closed）。
     expect(await terminateWindowsIdentities([{ pid: 500, created: T0 }], { query: async () => table, kill: async () => false, verifyMs: 50 })).toBe(false);
+  });
+});
+
+describe('Windows owner spawn options', () => {
+  it('uses Node IPC and does not detach, so extra stdio handles are inherited', () => {
+    expect(ownedProcessSpawnOptions('win32')).toEqual({
+      detached: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe', 'ipc'], serialization: 'json',
+    });
+    expect(ownedProcessSpawnOptions('linux')).toEqual({
+      detached: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
+    });
+    expect(ownedProcessSpawnOptions('darwin').stdio[3]).toBe('pipe');
   });
 });
 

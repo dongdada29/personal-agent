@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { createAcpEngineAdapter } from './engine-acp.js';
 import type { EngineAdapter, EngineConfig } from './engine.js';
@@ -15,7 +15,8 @@ export function fakeEngineArgs(baseUrl: string = import.meta.url): string[] {
   if (existsSync(bundled)) return [bundled];
   const fixture = fileURLToPath(new URL('./engine-fake-fixture.ts', baseUrl));
   const loader = createRequire(baseUrl).resolve('tsx');
-  return ['--import', loader, fixture];
+  // Windows ESM loader rejects a raw `D:\...` specifier; POSIX `node file.ts` keeps the path.
+  return ['--import', loader, process.platform === 'win32' ? pathToFileURL(fixture).href : fixture];
 }
 
 /** An independent stdio ACP process, using the same pinned SDK as real engines. */

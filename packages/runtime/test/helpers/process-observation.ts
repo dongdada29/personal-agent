@@ -3,6 +3,8 @@ import { execFileSync } from 'node:child_process';
 /** Independent test observation: ps states, rather than the runtime's /proc parser. */
 export function processRunning(pid: number | undefined): boolean {
   if (pid === undefined) return false;
+  // Windows 没有 POSIX 进程组；测试里用 -pgid 表示“整棵树”，这里改查 owner PID。
+  if (pid < 0 && process.platform === 'win32') pid = -pid;
   try { process.kill(pid, 0); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;

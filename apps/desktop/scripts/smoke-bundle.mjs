@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(desktop, 'dist', 'server', 'desktop-main.mjs');
@@ -16,7 +16,7 @@ const dataDir = mkdtempSync(join(tmpdir(), 'pa-desktop-smoke-'));
 const token = randomBytes(32).toString('base64url');
 const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
 delete env.NODE_OPTIONS;
-const child = fork(entry, [], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'], env });
+const child = fork(process.platform === 'win32' ? pathToFileURL(entry) : entry, [], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'], env });
 const message = (type) => new Promise((resolveMessage, reject) => {
   const timer = setTimeout(() => reject(new Error(`timeout waiting for ${type}`)), 60_000);
   child.on('message', function onMessage(value) {
