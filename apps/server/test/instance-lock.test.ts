@@ -5,7 +5,10 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { acquireInstanceLock } from '../src/instance-lock.js';
 
 const state = vi.hoisted(() => ({ inspect: vi.fn<(pid: number) => boolean>() }));
-vi.mock('@personal-agent/runtime', () => ({ processAlive: state.inspect }));
+vi.mock('@personal-agent/runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@personal-agent/runtime')>();
+  return { ...actual, processAlive: state.inspect };
+});
 const roots: string[] = [];
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
 function fixture() {
