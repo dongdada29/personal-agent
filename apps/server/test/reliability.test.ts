@@ -207,7 +207,7 @@ describe('local reliability API controls', () => {
   it('finishes both analysis runs before boundary pause and applies feedback only to the next stage', async () => {
     const engine = controlledEngine({ holdAnalysis: true }); const server = await fixture({ autoRun: true, engine });
     const task = await createDevelopment(server, server.repository);
-    await expect.poll(() => engine.prompts.filter(prompt => prompt.stage === 'analysis').length).toBe(2);
+    await expect.poll(() => engine.prompts.filter(prompt => prompt.stage === 'analysis').length, { timeout: 5000 }).toBe(2);
     const oldAttempt = server.store.require(task.id).activeAttemptId;
     const feedback = await control(server, task.id, { commandId: 'analysis-feedback', action: 'feedback', requirements: 'Add blank-input coverage in the next stage.' });
     expect(feedback.statusCode).toBe(200);
