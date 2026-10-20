@@ -14,7 +14,7 @@ import { processRunning as alive } from '../../../packages/runtime/test/helpers/
 import { createFixtureIpc, withFixtureCleanup } from './fixtures/fixture-ipc.js';
 
 const loader = nodeEsmSpecifier(createRequire(import.meta.url).resolve('tsx'));
-const serverPath = nodeEsmSpecifier(fileURLToPath(new URL('./fixtures/restart-server.ts', import.meta.url)));
+const serverPath = fileURLToPath(new URL('./fixtures/restart-server.ts', import.meta.url));
 async function until<T>(read: () => Promise<T>, check: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + (process.platform === 'win32' ? 45_000 : 8_000);
   for (;;) { const value = await read(); if (check(value)) return value;

@@ -50,7 +50,7 @@ async function exchangeWorker(filename: string, now: number) {
       catch (error) { process.send({ ok: false, code: error.code }); }
       finally { auth.close(); process.disconnect(); }
     });`);
-  const child = spawn(process.execPath, ['--import', loader, nodeEsmSpecifier(script), filename, String(now)],
+  const child = spawn(process.execPath, ['--import', loader, script, filename, String(now)],
     { env: { PATH: process.env.PATH }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   children.push(child);
   const exit = new Promise<void>(resolve => child.once('exit', () => resolve()));

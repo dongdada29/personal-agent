@@ -14,7 +14,6 @@ import { nodeEsmSpecifier } from '../src/process-windows.js';
 import { processRunning as processAlive } from './helpers/process-observation.js';
 
 const fixture = fileURLToPath(new URL('../src/engine-fake-fixture.ts', import.meta.url));
-const fixtureSpecifier = nodeEsmSpecifier(fixture);
 const loader = nodeEsmSpecifier(createRequire(import.meta.url).resolve('tsx'));
 const startupBudgetMs = process.platform === 'win32' ? engineStartupTimeoutMs() : 3_000;
 const pollStartupMs = process.platform === 'win32' ? 30_000 : 3_000;
@@ -89,7 +88,7 @@ async function openPermissionDeadlineFixture(options: {
       }
     });
   `);
-  const session = await createAcpEngineAdapter({ command: process.execPath, args: [nodeEsmSpecifier(path)],
+  const session = await createAcpEngineAdapter({ command: process.execPath, args: [path],
     promptTimeoutMs: options.promptTimeoutMs, startupTimeoutMs: startupBudgetMs,
     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
   }).open(context, { onEvent: () => {}, onPermission });
@@ -133,10 +132,10 @@ describe('stdio ACP engine adapter', () => {
   it('registers a stable engine owner before launching the ACP child and records closure after group exit', async () => {
     const marker = join(cwd, 'child-started');
     const bootstrap = join(cwd, 'bootstrap.mjs');
-    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixtureSpecifier)});`);
+    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(nodeEsmSpecifier(fixture))});`);
     const entered = deferred<void>(), release = deferred<void>();
     const records: OwnedProcessRecord[] = [];
-    const opening = open({ args: ['--import', loader, nodeEsmSpecifier(bootstrap)] }, {
+    const opening = open({ args: ['--import', loader, bootstrap] }, {
       async onProcessStart(record) { records.push(record); entered.resolve(); await release.promise; },
       onProcessEnd(record) {
         expect(processAlive(record.pid)).toBe(false); expect(processAlive(-record.pgid)).toBe(false); records.push(record);
@@ -157,10 +156,10 @@ describe('stdio ACP engine adapter', () => {
   it('cleans startup ownership persistence failure before returning EVENT_FAILURE without launching its child', async () => {
     const marker = join(cwd, 'must-not-run');
     const bootstrap = join(cwd, 'bootstrap.mjs');
-    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixtureSpecifier)});`);
+    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(nodeEsmSpecifier(fixture))});`);
     let owner: OwnedProcessRecord | undefined;
     const onProcessEnd = vi.fn();
-    const error = await open({ args: ['--import', loader, nodeEsmSpecifier(bootstrap)] }, {
+    const error = await open({ args: ['--import', loader, bootstrap] }, {
       onProcessStart(record) { owner = record; throw new Error('private persistence fixture detail'); }, onProcessEnd,
     }).catch(error => error);
     expect(error).toMatchObject({ code: 'EVENT_FAILURE' });
@@ -173,11 +172,11 @@ describe('stdio ACP engine adapter', () => {
   it('cannot launch a child when startup cancellation interrupts pending owner persistence', async () => {
     const marker = join(cwd, 'must-not-run');
     const bootstrap = join(cwd, 'bootstrap.mjs');
-    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixtureSpecifier)});`);
+    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(nodeEsmSpecifier(fixture))});`);
     const entered = deferred<void>(), release = deferred<void>(), closed = deferred<OwnedProcessRecord>();
     const controller = new AbortController();
     context.signal = controller.signal;
-    const opening = expect(open({ args: ['--import', loader, nodeEsmSpecifier(bootstrap)] }, {
+    const opening = expect(open({ args: ['--import', loader, bootstrap] }, {
       async onProcessStart() { entered.resolve(); await release.promise; },
       onProcessEnd(record) { expect(processAlive(-record.pgid)).toBe(false); closed.resolve(record); },
     })).rejects.toMatchObject({ code: 'ABORTED' });
@@ -191,7 +190,7 @@ describe('stdio ACP engine adapter', () => {
   });
 
   it('delivers the restrictive Claude probe options and disabled client capabilities over the actual ACP wire', async () => {
-    const config = { ...createClaudeProbeConfig(cwd), args: ['--import', loader, fixtureSpecifier, '--require-safe-probe'] };
+    const config = { ...createClaudeProbeConfig(cwd), args: ['--import', loader, fixture, '--require-safe-probe'] };
     expect(await createAcpEngineAdapter(config).probe()).toMatchObject({ protocolReady: true, sessionReady: true, planModeSupported: true });
   });
 
@@ -204,7 +203,7 @@ describe('stdio ACP engine adapter', () => {
     const config = createClaudeProbeConfig(cwd, { source: 'user', ...metadata });
     expect(JSON.stringify(config)).not.toContain('SECRET_TEST_TOKEN');
     expect(JSON.stringify(config)).not.toContain('private-model-setting');
-    const wireConfig = { ...config, args: ['--import', loader, fixtureSpecifier, '--require-safe-probe'] };
+    const wireConfig = { ...config, args: ['--import', loader, fixture, '--require-safe-probe'] };
     expect(await createAcpEngineAdapter(wireConfig).probe()).toMatchObject({ sessionReady: true, planModeSupported: true });
   });
 
@@ -216,7 +215,7 @@ describe('stdio ACP engine adapter', () => {
   });
 
   it('rejects missing plan capability and closes the engine on startup failure', async () => {
-    const options = { args: ['--import', loader, fixtureSpecifier, '--no-plan'] };
+    const options = { args: ['--import', loader, fixture, '--no-plan'] };
     await expect(open(options)).rejects.toMatchObject({ code: 'MODE_UNSUPPORTED' });
     expect(await createFakeEngineAdapter({ ...options, cwd }).probe()).toMatchObject({
       protocolReady: true, sessionReady: false, planModeSupported: false, error: { code: 'MODE_UNSUPPORTED' },
@@ -224,7 +223,7 @@ describe('stdio ACP engine adapter', () => {
   });
 
   it('rejects failed mode selection rather than quietly using the current mode', async () => {
-    await expect(open({ args: ['--import', loader, fixtureSpecifier, '--mode-failure'] })).rejects.toMatchObject({ code: 'ENGINE_FAILED' });
+    await expect(open({ args: ['--import', loader, fixture, '--mode-failure'] })).rejects.toMatchObject({ code: 'ENGINE_FAILED' });
   });
 
   it('waits independently for permission resolution and rejects invalid or stale decisions', async () => {
@@ -450,7 +449,7 @@ describe('stdio ACP engine adapter', () => {
 
   it('bounds startup hangs and returns a safe error if the command is missing', async () => {
     const start = Date.now();
-    await expect(open({ args: ['--import', loader, fixtureSpecifier, '--startup-hang'], startupTimeoutMs: 100 })).rejects.toMatchObject({ code: 'STARTUP_TIMEOUT' });
+    await expect(open({ args: ['--import', loader, fixture, '--startup-hang'], startupTimeoutMs: 100 })).rejects.toMatchObject({ code: 'STARTUP_TIMEOUT' });
     expect(Date.now() - start).toBeLessThan(3_000);
     await expect(createAcpEngineAdapter({ command: join(cwd, 'nonexistent-engine') }).open(context, { onEvent: () => {} })).rejects.toMatchObject({ code: 'ENGINE_FAILED' });
   });
@@ -494,7 +493,7 @@ describe('stdio ACP engine adapter', () => {
       const controller = new AbortController();
       const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
       const onEvent = vi.fn();
-      const adapter = createAcpEngineAdapter({ command: process.execPath, args: [nodeEsmSpecifier(startupFixture)],
+      const adapter = createAcpEngineAdapter({ command: process.execPath, args: [startupFixture],
         startupTimeoutMs: Math.max(30_000, engineStartupTimeoutMs()) });
       const opening = expect(adapter.open({ ...context, signal: controller.signal }, { onEvent }))
         .rejects.toMatchObject({ code: 'ABORTED' });

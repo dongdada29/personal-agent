@@ -1,12 +1,12 @@
 /** Test-only IPC service. It never listens on a network port or opens a model. */
 import { fileURLToPath } from 'node:url';
-import { createAcpEngineAdapter, engineStartupTimeoutMs, nodeEsmSpecifier } from '@personal-agent/runtime';
+import { createAcpEngineAdapter, engineStartupTimeoutMs } from '@personal-agent/runtime';
 import { buildApp } from '../../src/app.js';
 const dataDir = process.argv[2];
 try {
   const { app, store } = await buildApp({ dataDir, webRoot: `${dataDir}/absent`,
     realAdapter: createAcpEngineAdapter({ command: process.execPath,
-      args: [nodeEsmSpecifier(fileURLToPath(new URL('./restart-acp.mjs', import.meta.url)))],
+      args: [fileURLToPath(new URL('./restart-acp.mjs', import.meta.url))],
       env: { PATH: process.env.PATH },
       startupTimeoutMs: process.platform === 'win32' ? engineStartupTimeoutMs() : 5_000, promptTimeoutMs: 60_000 }),
   });

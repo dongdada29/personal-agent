@@ -14,10 +14,11 @@ import { nodeEsmSpecifier } from './process-windows.js';
  */
 export function fakeEngineArgs(baseUrl: string = import.meta.url): string[] {
   const bundled = fileURLToPath(new URL('./engine-fake-fixture.mjs', baseUrl));
-  if (existsSync(bundled)) return [nodeEsmSpecifier(bundled)];
+  // 主模块保持文件系统路径；只有 `--import` 在 Windows 上需要 file://。
+  if (existsSync(bundled)) return [bundled];
   const fixture = fileURLToPath(new URL('./engine-fake-fixture.ts', baseUrl));
   const loader = nodeEsmSpecifier(createRequire(baseUrl).resolve('tsx'));
-  return ['--import', loader, nodeEsmSpecifier(fixture)];
+  return ['--import', loader, fixture];
 }
 
 /** An independent stdio ACP process, using the same pinned SDK as real engines. */

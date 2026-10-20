@@ -7,11 +7,15 @@ import { Socket } from 'node:net';
 import { StringDecoder } from 'node:string_decoder';
 import { pathToFileURL } from 'node:url';
 
-/** Windows ESM loader treats `D:\file.mjs` as protocol `d:`; Node module args must be file://. */
-function windowsNodeModuleArg(arg) {
-  if (process.platform !== 'win32' || typeof arg !== 'string' || arg.startsWith('file:') || arg.startsWith('--')) return arg;
+/** `--import D:\tsx` is protocol `d:`; the main module path must stay a filesystem path. */
+function windowsImportArg(arg) {
+  if (typeof arg !== 'string' || arg.startsWith('file:') || arg.startsWith('--')) return arg;
   if (!/^[A-Za-z]:[\\/]/.test(arg) || !/\.(mjs|cjs|js|ts)$/i.test(arg)) return arg;
   return pathToFileURL(arg).href;
+}
+function windowsNodeArgs(args) {
+  if (process.platform !== 'win32') return args;
+  return args.map((arg, index) => (index > 0 && args[index - 1] === '--import' ? windowsImportArg(arg) : arg));
 }
 
 const marker = process.argv[2];
@@ -61,7 +65,7 @@ const startChild = (request) => {
   delete env.NODE_UNIQUE_ID;
   delete env.PERSONAL_AGENT_OWNER_IPC;
   if (process.versions.electron && request.command !== process.execPath) delete env.ELECTRON_RUN_AS_NODE;
-  child = spawn(request.command, request.args.map(windowsNodeModuleArg), { detached: false, shell: false, windowsHide: true, env, stdio: ['inherit', 'inherit', 'inherit'] });
+  child = spawn(request.command, windowsNodeArgs(request.args), { detached: false, shell: false, windowsHide: true, env, stdio: ['inherit', 'inherit', 'inherit'] });
   // Windows has no process groups: the parent records this PID (and its creation
   // time) so orphaned descendants can still be found after this owner exits.
   if (child.pid !== undefined) send({ type: 'CHILD', pid: child.pid });
