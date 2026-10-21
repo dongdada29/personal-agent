@@ -8,12 +8,15 @@ import { methods, PROTOCOL_VERSION, type ToolCallUpdate } from '@agentclientprot
 import { createFakeEngineAdapter } from '../src/engine-fake.js';
 import { createAcpEngineAdapter } from '../src/engine-acp.js';
 import { createClaudeProbeConfig, readClaudeUserProbeMetadata } from '../src/engine-claude.js';
-import type { EngineConfig, EngineEvent, EngineHooks, EnginePermission, EngineRunContext, EngineSession } from '../src/engine.js';
+import { engineStartupTimeoutMs, type EngineConfig, type EngineEvent, type EngineHooks, type EnginePermission, type EngineRunContext, type EngineSession } from '../src/engine.js';
 import type { OwnedProcessRecord } from '../src/process-registry.js';
+import { nodeEsmSpecifier } from '../src/process-windows.js';
 import { processRunning as processAlive } from './helpers/process-observation.js';
 
 const fixture = fileURLToPath(new URL('../src/engine-fake-fixture.ts', import.meta.url));
-const loader = createRequire(import.meta.url).resolve('tsx');
+const loader = nodeEsmSpecifier(createRequire(import.meta.url).resolve('tsx'));
+const startupBudgetMs = process.platform === 'win32' ? engineStartupTimeoutMs() : 3_000;
+const pollStartupMs = process.platform === 'win32' ? 30_000 : 3_000;
 let cwd: string;
 let context: EngineRunContext;
 let sessions: EngineSession[];
@@ -86,7 +89,7 @@ async function openPermissionDeadlineFixture(options: {
     });
   `);
   const session = await createAcpEngineAdapter({ command: process.execPath, args: [path],
-    promptTimeoutMs: options.promptTimeoutMs, startupTimeoutMs: 3_000,
+    promptTimeoutMs: options.promptTimeoutMs, startupTimeoutMs: startupBudgetMs,
     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
   }).open(context, { onEvent: () => {}, onPermission });
   sessions.push(session);
@@ -129,7 +132,7 @@ describe('stdio ACP engine adapter', () => {
   it('registers a stable engine owner before launching the ACP child and records closure after group exit', async () => {
     const marker = join(cwd, 'child-started');
     const bootstrap = join(cwd, 'bootstrap.mjs');
-    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixture)});`);
+    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(nodeEsmSpecifier(fixture))});`);
     const entered = deferred<void>(), release = deferred<void>();
     const records: OwnedProcessRecord[] = [];
     const opening = open({ args: ['--import', loader, bootstrap] }, {
@@ -153,7 +156,7 @@ describe('stdio ACP engine adapter', () => {
   it('cleans startup ownership persistence failure before returning EVENT_FAILURE without launching its child', async () => {
     const marker = join(cwd, 'must-not-run');
     const bootstrap = join(cwd, 'bootstrap.mjs');
-    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixture)});`);
+    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(nodeEsmSpecifier(fixture))});`);
     let owner: OwnedProcessRecord | undefined;
     const onProcessEnd = vi.fn();
     const error = await open({ args: ['--import', loader, bootstrap] }, {
@@ -169,7 +172,7 @@ describe('stdio ACP engine adapter', () => {
   it('cannot launch a child when startup cancellation interrupts pending owner persistence', async () => {
     const marker = join(cwd, 'must-not-run');
     const bootstrap = join(cwd, 'bootstrap.mjs');
-    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(fixture)});`);
+    await writeFile(bootstrap, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'started'); await import(${JSON.stringify(nodeEsmSpecifier(fixture))});`);
     const entered = deferred<void>(), release = deferred<void>(), closed = deferred<OwnedProcessRecord>();
     const controller = new AbortController();
     context.signal = controller.signal;
@@ -309,20 +312,26 @@ describe('stdio ACP engine adapter', () => {
 
   it.each(['allow-once', 'reject-once'])(
     'resumes only the remaining active budget after the human chooses %s', async (optionId) => {
+      // Windows taskkill after timeout is ~1s, so remaining vs a reset budget must
+      // be farther apart than the 350/180/300 POSIX numbers.
+      const windows = process.platform === 'win32';
+      const promptTimeoutMs = windows ? 3_000 : 350;
+      const activeBeforeMs = windows ? 2_200 : 180;
       const request = deferred<EnginePermission>();
-      const session = await openPermissionDeadlineFixture({ promptTimeoutMs: 350, activeBeforeMs: 180 },
+      const session = await openPermissionDeadlineFixture({ promptTimeoutMs, activeBeforeMs },
         (permission) => { request.resolve(permission); });
       let settled = false;
       const prompt = session.prompt('Read fixture').catch((error: unknown) => error)
         .finally(() => { settled = true; });
       const permission = await request.promise;
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, windows ? 500 : 400));
       expect(settled).toBe(false);
       const resumedAt = performance.now();
       await session.resolvePermission(permission.id, optionId);
       expect(await prompt).toMatchObject({ code: 'PROMPT_TIMEOUT' });
-      // A reset 350ms budget would violate this bound even before cleanup.
-      expect(performance.now() - resumedAt).toBeLessThan(300);
+      // POSIX: a reset 350ms budget would exceed 300ms even before cleanup.
+      // Windows: remaining ~800ms + ~1s cleanup stays under 2.5s; a reset 3s budget would not.
+      expect(performance.now() - resumedAt).toBeLessThan(windows ? 2_500 : 300);
       expect(processAlive(session.processId)).toBe(false);
     },
   );
@@ -490,7 +499,8 @@ describe('stdio ACP engine adapter', () => {
       const controller = new AbortController();
       const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
       const onEvent = vi.fn();
-      const adapter = createAcpEngineAdapter({ command: process.execPath, args: [startupFixture], startupTimeoutMs: 30_000 });
+      const adapter = createAcpEngineAdapter({ command: process.execPath, args: [startupFixture],
+        startupTimeoutMs: Math.max(30_000, engineStartupTimeoutMs()) });
       const opening = expect(adapter.open({ ...context, signal: controller.signal }, { onEvent }))
         .rejects.toMatchObject({ code: 'ABORTED' });
       let pid = 0;
@@ -500,7 +510,7 @@ describe('stdio ACP engine adapter', () => {
           pid = progress.pid;
           return progress.method;
         } catch { return undefined; }
-      }, { timeout: 3_000 }).toBe(pendingMethod);
+      }, { timeout: pollStartupMs }).toBe(pendingMethod);
       expect(processAlive(pid)).toBe(true);
       const start = Date.now();
       controller.abort();

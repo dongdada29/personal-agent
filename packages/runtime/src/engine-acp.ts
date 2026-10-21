@@ -7,7 +7,7 @@ import {
   type ClientConnection, type RequestPermissionResponse, type SessionNotification,
 } from '@agentclientprotocol/sdk';
 import {
-  EngineError, safeEngineError, type EngineAdapter, type EngineArtifact, type EngineConfig,
+  EngineError, engineStartupTimeoutMs, safeEngineError, type EngineAdapter, type EngineArtifact, type EngineConfig,
   type EngineEvent, type EngineHooks, type EnginePermission, type EngineProbeResult,
   type EnginePromptResult, type EngineRunContext, type EngineSession,
 } from './engine.js';
@@ -181,7 +181,7 @@ class AcpEngineSession implements EngineSession {
         this.assertActive(signal);
         await this.emit({ type: 'mode', modeId: context.mode });
         this.assertActive(signal);
-      })(), interrupted]), this.config.startupTimeoutMs ?? 15_000, new EngineError('STARTUP_TIMEOUT', 'Engine startup exceeded its deadline.'));
+      })(), interrupted]), this.config.startupTimeoutMs ?? engineStartupTimeoutMs(), new EngineError('STARTUP_TIMEOUT', 'Engine startup exceeded its deadline.'));
     } catch (error) {
       await this.close();
       throw safeEngineError(error);

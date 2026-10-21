@@ -23,6 +23,8 @@
 - **持久事件与恢复**：SQLite 保存任务、事件、审批、成果和进程账本；页面关闭不取消任务。
 - **无账号 fake 演示**：`fake` 引擎可在临时数据目录中演示完整状态流，不调用真实模型。
 - **paired 远程访问代码路径**：作者实例已通过 Cloudflare Named Tunnel 在 paired 模式下上线；完整实体手机移动网络流程仍需按目标环境单独验收。
+- **桌面客户端**：Electron 托管或连接本机实例；渲染进程只看到 `app://`，令牌不进 argv/env。
+- **Linux 云电脑**：本机 Colima / WSL2 / Podman 与云端 SSH 或主机守护进程并排管理；桌面只经鉴权代理打开。
 
 ## 五分钟本地体验
 
@@ -72,13 +74,13 @@ flowchart TD
 
 ### 当前状态
 
-当前发布版本为 **v0.1.0**（`eeeca3c`），全量测试为 **753 项、37 个测试文件**。CI 在 Ubuntu 与 macOS、Node 22.18.0 与 24.x 上运行类型检查、全量测试、构建、doctor、smoke、demo 自检和分享检查。自动测试使用临时 Git 仓库、fake/mock 引擎、验证子进程和虚拟设备，不调用真实模型，也不给真实设备开通访问。
+当前发布版本为 **v0.1.0**（`eeeca3c`）。本分支在此之上加入桌面客户端与 Linux 云电脑。CI 在 Ubuntu、macOS 与 Windows、Node 22.18.0 与 24.x 上运行类型检查、全量测试、构建、doctor、smoke、demo 自检和分享检查，并额外打包未签名的 dmg / nsis / AppImage。自动测试使用临时 Git 仓库、fake/mock 引擎、验证子进程和虚拟设备，不调用真实模型，也不给真实设备开通访问。
 
-浏览器工作台支持窄屏；默认入口是本机 loopback。公网访问必须启用 paired 模式并位于 HTTPS 反向代理或 Cloudflare Named Tunnel 后。作者的实例已经通过 Named Tunnel 与 paired 模式上线；实体手机关闭 Wi-Fi 后的完整创建、审批、接管、重连、接收和撤销流程仍按目标环境单独验收。Windows 进程管理暂不支持，单机部署没有冗余或自动故障切换。
+浏览器工作台支持窄屏；默认入口是本机 loopback。公网访问必须启用 paired 模式并位于 HTTPS 反向代理或 Cloudflare Named Tunnel 后。作者的实例已经通过 Named Tunnel 与 paired 模式上线；实体手机关闭 Wi-Fi 后的完整创建、审批、接管、重连、接收和撤销流程仍按目标环境单独验收。单机部署没有冗余或自动故障切换。Windows 进程归属已落地，剩余缺口见 [windows-gaps.md](docs/windows-gaps.md)。
 
 ### 首次本地演示
 
-准备 Node.js **22.18 或更高**、npm 和 Git。当前进程管理支持 macOS/Linux POSIX；其他目标机器仍需复验，Windows 暂不支持启动。
+准备 Node.js **22.18 或更高**、npm 和 Git。进程管理支持 macOS、Linux 和 Windows；Windows 剩余缺口见 [windows-gaps.md](docs/windows-gaps.md)。
 
 在取得的源码目录运行：
 
@@ -130,6 +132,8 @@ npm exec --yes --package playwright -- node scripts/capture-demo-assets.mjs
 | 重启恢复 | 核验已登记进程归属，活动任务进入 interrupted；用户明确继续后恢复 |
 | 实例配置 | Agent 档案和执行超时；任务保存创建时快照，后续修改不改变既有任务 |
 | 设备访问 | 显式 paired 模式、一次性配对、CSRF 与设备撤销；默认仅 loopback |
+| 桌面客户端 | Electron 托管内置服务或连接 `127.0.0.1:47801`；见 [桌面客户端](docs/desktop.md) |
+| Linux 云电脑 | 本机 Colima（默认 2 vCPU / 4 GiB / 40 GiB）或云端主机；桌面只经鉴权代理 |
 
 单实例按 FIFO 一次执行一个任务，分析阶段最多两个引擎会话并行。`completed` 表示执行完成，`accepted` 表示用户接收；接收不会提交、合并、推送或部署代码。worktree 隔离 Git 修改，不能充当操作系统沙箱。
 
@@ -159,11 +163,13 @@ npm run share:check
 
 | 目录 | 职责 |
 | --- | --- |
-| `apps/server` | Fastify 5 API、SSE、同源 Web 托管、实例锁与启动恢复 |
-| `apps/web` | React 18 / Vite 5 / Antd 5 浏览器工作台 |
+| `apps/server` | Fastify 5 API、SSE、同源 Web 托管、实例锁、启动恢复与 box 代理 |
+| `apps/web` | React 18 / Vite 5 / Antd 5 浏览器与桌面共用工作台 |
+| `apps/desktop` | Electron 主进程、`app://` 代理、托管/连接模式 |
+| `deploy/box` | 加固 pa-box 镜像、seccomp、Xvnc unix socket 与网关 |
 | `packages/contracts` | 共享类型、任务状态机与错误契约 |
 | `packages/runtime` | Node SQLite、ACP、worktree、流水线、验证、检查点和进程账本 |
-| `scripts` | 本地演示、fixture、受限 Claude 探针、备份检查与显式配对操作 |
+| `scripts` | 本地演示、fixture、受限 Claude 探针、备份检查、显式配对与 box 安装 |
 
 npm workspaces / TypeScript ESM；依赖由 `package-lock.json` 固定，ACP SDK **1.3.0**、Claude ACP **0.65.0**。模型凭据由引擎使用其本机原生配置，本项目不提供登录或凭据搬运服务，也不要求在 `.env` 中保存模型密钥。
 

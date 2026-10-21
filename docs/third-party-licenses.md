@@ -63,3 +63,5 @@ Anthropic SDK 及平台包的现有许可文件注明版权归 Anthropic PBC。�
 归档应从已审核的 commit 导出，仅纳入该 commit 的项目文件，并附 commit、文件清单及 SHA-256 校验值；检查没有个人绝对路径、真实基础设施值、秘密、符号链接或越界路径。`.gitignore` 不是分享包内容审核的替代品。
 
 当前说明没有完成 `node_modules`、预构建 Web、单文件可执行程序或容器镜像的再分发审核。如果将来提供这些形式，先针对实际产物补齐第三方许可文本与版权归属、复核 Anthropic 执行引擎条款，并另行记录审核结果。
+
+桌面客户端（Electron 44、electron-builder、@novnc/novnc MPL-2.0、ws、esbuild）以及 pa-box 镜像（Debian、TigerVNC、Chromium、Openbox 等）不在这次源码分享审核范围内。打出来的 dmg / nsis / AppImage 内含 Chromium 与 Claude Agent SDK 原生 CLI，不能按本项目 Apache-2.0 再分发，需对实际产物单独做许可与归属核对。

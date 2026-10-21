@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { collectTaskPatch, createTaskWorktree, inspectWorkspace } from '../src/workspace.js';
+import { collectTaskPatch, createTaskWorktree, gitNullDevice, inspectWorkspace } from '../src/workspace.js';
 
 // Simulate default user/system configuration discovery without editing HOME or
 // the host's Git files. Explicit child configuration takes precedence.
@@ -29,8 +29,8 @@ let dataDir: string;
 let baselineSha: string;
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execute('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', ...args],
-    { cwd, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+  const { stdout } = await execute('git', ['-c', `core.hooksPath=${gitNullDevice}`, '-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', ...args],
+    { cwd, env: { ...process.env, GIT_CONFIG_GLOBAL: gitNullDevice, GIT_CONFIG_SYSTEM: gitNullDevice, GIT_CONFIG_NOSYSTEM: '1' } });
   return stdout;
 }
 
@@ -181,12 +181,13 @@ describe('registered Git workspaces and task worktrees', () => {
     await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\nprintf unsafe > '${marker}'\n`, { mode: 0o755 });
     const globalPath = join(directory, 'ambient-global.gitconfig');
     const systemPath = join(directory, 'ambient-system.gitconfig');
-    await writeFile(globalPath, `[core]\n\thooksPath = ${hooks}\n[commit]\n\tgpgSign = true\n[diff]\n\tnoprefix = true\n`);
+    await writeFile(globalPath, `[core]\n\thooksPath = ${hooks.replaceAll('\\', '/')}\n[commit]\n\tgpgSign = true\n[diff]\n\tnoprefix = true\n`);
     await writeFile(systemPath, '[commit]\n\tgpgSign = true\n');
-    const controlEnv = { ...process.env, GIT_CONFIG_GLOBAL: globalPath, GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+    const controlEnv = { ...process.env, GIT_CONFIG_GLOBAL: globalPath, GIT_CONFIG_SYSTEM: gitNullDevice, GIT_CONFIG_NOSYSTEM: '1' };
     for (const [key, value] of [['core.hooksPath', hooks], ['commit.gpgSign', 'true'], ['diff.noprefix', 'true']]) {
       const { stdout } = await execute('git', ['config', '--get', key], { cwd: source, env: controlEnv });
-      expect(stdout.trim()).toBe(value);
+      // Git for Windows prints core.hooksPath with forward slashes; Node join uses backslashes.
+      expect(stdout.trim().replaceAll('\\', '/')).toBe(String(value).replaceAll('\\', '/'));
     }
     ambient.globalPath = globalPath; ambient.systemPath = systemPath;
     const { worktreePath } = await prepare('ambient-config');
@@ -200,13 +201,13 @@ describe('registered Git workspaces and task worktrees', () => {
     await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(ambient.childEnvironments.length).toBeGreaterThan(0);
     for (const env of ambient.childEnvironments) {
-      expect(env.GIT_CONFIG_GLOBAL).toBe('/dev/null');
-      expect(env.GIT_CONFIG_SYSTEM).toBe('/dev/null');
+      expect(env.GIT_CONFIG_GLOBAL).toBe(gitNullDevice);
+      expect(env.GIT_CONFIG_SYSTEM).toBe(gitNullDevice);
       expect(env.GIT_CONFIG_NOSYSTEM).toBe('1');
     }
   });
 
-  it('supports repository root paths with spaces and trailing newlines', async () => {
+  it.skipIf(process.platform === 'win32')('supports repository root paths with spaces and trailing newlines', async () => {
     const unusual = join(directory, 'with spaces\n');
     await git(source, 'worktree', 'add', '-q', '-b', 'unusual-root', unusual, baselineSha);
     expect((await inspectWorkspace(unusual)).path).toBe(unusual);
@@ -235,10 +236,24 @@ describe('complete bounded textual patches', () => {
     await git(check.worktreePath, 'apply', '--check', patchFile);
   });
 
-  it('respects ignore rules and handles quoted, newline and shell metacharacter filenames', async () => {
+  it.skipIf(process.platform === 'win32')('respects ignore rules and handles quoted, newline and shell metacharacter filenames', async () => {
     const { worktreePath } = await prepare();
     await writeFile(join(worktreePath, 'excluded.ignored'), 'IGNORED\n');
     await writeFile(join(worktreePath, '-$(touch nope) "quoted"\nfile.txt'), 'Safe new file\n');
+    const patch = await collectTaskPatch({ worktreePath, baselineSha });
+    expect(patch).not.toContain('IGNORED');
+    expect(patch).toContain('+Safe new file');
+    const check = await prepare('weird-patch-check');
+    const patchFile = join(directory, 'weird.patch');
+    await writeFile(patchFile, patch);
+    await git(check.worktreePath, 'apply', '--check', patchFile);
+    await expect(readFile(join(worktreePath, 'nope'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.runIf(process.platform === 'win32')('respects ignore rules and quoted filenames that Windows can store', async () => {
+    const { worktreePath } = await prepare();
+    await writeFile(join(worktreePath, 'excluded.ignored'), 'IGNORED\n');
+    await writeFile(join(worktreePath, '-$(touch nope) quoted file.txt'), 'Safe new file\n');
     const patch = await collectTaskPatch({ worktreePath, baselineSha });
     expect(patch).not.toContain('IGNORED');
     expect(patch).toContain('+Safe new file');

@@ -7,16 +7,16 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { expect, it } from 'vitest';
 import type { TaskSnapshot } from '@personal-agent/contracts';
-import { recoverOwnedProcesses, TaskStore, processOwnerWrapperPath, type OwnedProcessRecord } from '@personal-agent/runtime';
+import { nodeEsmSpecifier, recoverOwnedProcesses, TaskStore, processOwnerWrapperPath, type OwnedProcessRecord } from '@personal-agent/runtime';
 import { acquireInstanceLock } from '../src/instance-lock.js';
 import { buildApp } from '../src/app.js';
 import { processRunning as alive } from '../../../packages/runtime/test/helpers/process-observation.js';
 import { createFixtureIpc, withFixtureCleanup } from './fixtures/fixture-ipc.js';
 
-const loader = createRequire(import.meta.url).resolve('tsx');
+const loader = nodeEsmSpecifier(createRequire(import.meta.url).resolve('tsx'));
 const serverPath = fileURLToPath(new URL('./fixtures/restart-server.ts', import.meta.url));
 async function until<T>(read: () => Promise<T>, check: (value: T) => boolean): Promise<T> {
-  const deadline = Date.now() + 8000;
+  const deadline = Date.now() + (process.platform === 'win32' ? 45_000 : 8_000);
   for (;;) { const value = await read(); if (check(value)) return value;
     if (Date.now() >= deadline) throw new Error('Fixture state deadline exceeded');
     await new Promise(resolve => setTimeout(resolve, 25));

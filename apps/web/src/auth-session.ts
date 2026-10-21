@@ -4,7 +4,12 @@ import type { AuthSession, Device, PairingTicket } from '@personal-agent/contrac
 export function verifiedSession(value: unknown, now = Date.now()): AuthSession {
   if (!value || typeof value !== 'object') throw new Error('Invalid session');
   const input = value as Partial<AuthSession>;
-  if (input.mode === 'loopback') return input.demo === 'fake' ? { mode: 'loopback', demo: 'fake' } : { mode: 'loopback' };
+  if (input.mode === 'loopback') {
+    // desktop 标记只来自托管模式的服务端会话；绝不与 fake demo 叠加（服务端也会拒绝这种组合）。
+    if (input.demo === 'fake') return { mode: 'loopback', demo: 'fake' };
+    if (input.desktop === true) return { mode: 'loopback', desktop: true };
+    return { mode: 'loopback' };
+  }
   const device = input.device;
   if (input.mode !== 'paired' || !device || typeof input.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.csrfToken)) throw new Error('Invalid paired session');
   if (typeof device.id !== 'string' || !device.id || typeof device.name !== 'string' || !device.name || typeof device.createdAt !== 'string' || typeof device.expiresAt !== 'string' || !Number.isFinite(Date.parse(device.createdAt)) || !Number.isFinite(Date.parse(device.expiresAt)) || Date.parse(device.expiresAt) <= now || device.revokedAt !== null) throw new Error('Inactive device');

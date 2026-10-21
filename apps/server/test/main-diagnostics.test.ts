@@ -37,7 +37,7 @@ describe('safe service startup diagnostics', () => {
   it.each([
     ['CLEANUP_FAILED', 'CLEANUP_FAILED', 'preserve'],
     ['EVENT_FAILURE', 'EVENT_FAILURE', 'persist'],
-    ['PROCESS_UNSUPPORTED', 'PROCESS_UNSUPPORTED', 'macOS or Linux'],
+    ['PROCESS_UNSUPPORTED', 'PROCESS_UNSUPPORTED', 'macOS, Linux or Windows'],
     ['SECURITY_CONFIG_INVALID', 'SECURITY_CONFIG_INVALID', 'HTTPS origin'],
     ['SECURITY_POLICY_CONFLICT', 'SECURITY_POLICY_CONFLICT', 'HTTPS origin'],
     ['DEMO_CONFIG_INVALID', 'DEMO_CONFIG_INVALID', 'npm run demo'],

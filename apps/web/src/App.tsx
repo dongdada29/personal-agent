@@ -11,6 +11,7 @@ import { TaskMutationCommands, MutationFlight, controlCommand, type ControlActio
 import { createTaskFeed, type TaskFeed, type TaskFeedConnectionState } from './task-feed';
 import { mergeApprovalRecords } from './approval-display';
 import { DevicePanel } from './DevicePanel';
+import { BoxPanel } from './BoxPanel';
 import { allowedTaskEngines, isFakeDemo, taskEngineForMode } from './demo-mode';
 
 const { TextArea } = Input;
@@ -177,7 +178,7 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
 
 export function App({ session }: { session: AuthSession }) {
   const fakeDemo = isFakeDemo(window.location.search, session);
-  const [view, setView] = useState<'workbench' | 'settings' | 'devices'>('workbench');
+  const [view, setView] = useState<'workbench' | 'settings' | 'devices' | 'box'>('workbench');
   const [goal, setGoal] = useState('');
   const [requestedEngine, setEngine] = useState<'fake' | 'claude'>('fake');
   const engine = taskEngineForMode(requestedEngine, fakeDemo);
@@ -472,7 +473,7 @@ export function App({ session }: { session: AuthSession }) {
           <span className="brand-mark" aria-hidden="true">P</span>
           <span>Personal Agent<span className="brand-subtitle">个人任务工作台</span></span>
         </a>
-        <Tag className="environment-tag" color={session.mode === 'paired' ? 'green' : 'blue'}>{session.mode === 'paired' ? '已配对设备' : '本机访问'}</Tag>
+        <Tag className="environment-tag" color={session.desktop ? 'cyan' : session.mode === 'paired' ? 'green' : 'blue'}>{session.desktop ? '桌面客户端' : session.mode === 'paired' ? '已配对设备' : '本机访问'}</Tag>
       </header>
 
       <main>
@@ -488,10 +489,11 @@ export function App({ session }: { session: AuthSession }) {
         <nav className="app-navigation" aria-label="工作台导航">
           <Button type={view === 'workbench' ? 'primary' : 'default'} aria-pressed={view === 'workbench'} onClick={() => setView('workbench')}>任务工作台</Button>
           <Button type={view === 'settings' ? 'primary' : 'default'} aria-pressed={view === 'settings'} onClick={() => setView('settings')}>实例配置</Button>
+          <Button type={view === 'box' ? 'primary' : 'default'} aria-pressed={view === 'box'} onClick={() => setView('box')}>Linux 云电脑</Button>
           {session.mode === 'paired' && <Button type={view === 'devices' ? 'primary' : 'default'} aria-pressed={view === 'devices'} onClick={() => setView('devices')}>设备管理</Button>}
         </nav>
 
-        {view === 'devices' && session.mode === 'paired' ? <DevicePanel session={session} /> : view === 'settings' ? <SettingsPanel settings={settings} profiles={profiles} loading={settingsLoading} error={settingsError} fakeDemo={fakeDemo} onReload={loadConfiguration} onSettingsChanged={(value) => { setSettings(value); if (!engineTouched.current) setEngine(taskEngineForMode(value.defaultEngine, fakeDemo)); }} onProfileChanged={(value) => setProfiles((previous) => [...previous.filter((item) => item.id !== value.id), value])} /> : <>
+        {view === 'box' ? <BoxPanel fakeDemo={fakeDemo} /> : view === 'devices' && session.mode === 'paired' ? <DevicePanel session={session} /> : view === 'settings' ? <SettingsPanel settings={settings} profiles={profiles} loading={settingsLoading} error={settingsError} fakeDemo={fakeDemo} onReload={loadConfiguration} onSettingsChanged={(value) => { setSettings(value); if (!engineTouched.current) setEngine(taskEngineForMode(value.defaultEngine, fakeDemo)); }} onProfileChanged={(value) => setProfiles((previous) => [...previous.filter((item) => item.id !== value.id), value])} /> : <>
         <Alert
           className="phase-notice"
           type="info"

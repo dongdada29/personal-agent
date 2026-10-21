@@ -223,6 +223,9 @@ export class AuthStore {
 
   close(): void {
     if (this.closed) return;
-    this.closed = true; this.listeners.clear(); this.db.close();
+    this.closed = true;
+    this.listeners.clear();
+    try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* still close */ }
+    this.db.close();
   }
 }

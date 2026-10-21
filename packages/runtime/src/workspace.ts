@@ -21,6 +21,16 @@ interface WorktreeOwnership { version: 1; taskId: string; workspacePath: string;
 const SHA = /^(?:[a-f\d]{40}|[a-f\d]{64})$/i;
 const MAX_PATCH_BYTES = 1024 * 1024;
 const outputPath = (value: string) => value.endsWith('\n') ? value.slice(0, -1) : value;
+/** Git for Windows 把 /dev/null 当普通路径；NUL 才是空设备。 */
+export const gitNullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+/** Git porcelain 在 Windows 上用正斜杠；Node join 用反斜杠。比较时统一分隔符与大小写。 */
+function sameFsPath(a: string, b: string): boolean {
+  const normalize = (value: string) => {
+    const unified = value.replace(/[\\/]+/gu, '/').replace(/\/$/u, '');
+    return process.platform === 'win32' ? unified.toLowerCase() : unified;
+  };
+  return normalize(a) === normalize(b);
+}
 
 function gitEnvironment(): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -30,8 +40,8 @@ function gitEnvironment(): NodeJS.ProcessEnv {
   // Clearing inherited GIT_* alone lets Git fall back to the user's global
   // configuration. Runtime inspection and patch output must use a predictable
   // configuration without ambient hooks, signing, filters or diff overrides.
-  return { ...env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: '/dev/null',
-    GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  return { ...env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: gitNullDevice,
+    GIT_CONFIG_SYSTEM: gitNullDevice, GIT_CONFIG_NOSYSTEM: '1' };
 }
 
 /** Every Git invocation uses an argument array and bounded output, with external diff disabled by callers. */
@@ -167,12 +177,15 @@ export async function createTaskWorktree(options: CreateTaskWorktreeOptions): Pr
       }
       const current = await inspectWorkspace(worktreePath);
       const actualBranch = (await git(current.path, ['branch', '--show-current'])).trim();
-      if (current.path !== worktreePath || current.headSha !== baselineSha || actualBranch !== branch || await commonGitDir(current.path) !== ownership.commonDir) {
+      if (!sameFsPath(current.path, worktreePath) || current.headSha !== baselineSha || actualBranch !== branch ||
+        !sameFsPath(await commonGitDir(current.path), ownership.commonDir)) {
         throw new WorkspaceError('WORKTREE_CONFLICT', 'The task worktree path, branch or baseline has changed; automatic reuse is unsafe.');
       }
       const registered = (await git(source.path, ['worktree', 'list', '--porcelain', '-z'])).split('\0\0').some((record) => {
         const fields = record.split('\0');
-        return fields.includes(`worktree ${worktreePath}`) && fields.includes(`branch refs/heads/${branch}`) && fields.includes(`HEAD ${baselineSha}`);
+        const listed = fields.find(field => field.startsWith('worktree '));
+        return Boolean(listed && sameFsPath(listed.slice('worktree '.length), worktreePath)) &&
+          fields.includes(`branch refs/heads/${branch}`) && fields.includes(`HEAD ${baselineSha}`);
       });
       if (!registered) throw new WorkspaceError('WORKTREE_CONFLICT', 'Git no longer registers this task worktree with its recorded owner.');
       return { worktreePath, baselineSha, branch, reused: true };
@@ -205,7 +218,7 @@ export async function collectTaskPatch(options: { worktreePath: string; baseline
   for (const file of untracked) {
     const metadata = await lstat(join(root, file));
     if (!metadata.isFile() && !metadata.isSymbolicLink()) throw new WorkspaceError('PATCH_UNSUPPORTED', 'An untracked directory or special file cannot be represented as a task patch.');
-    const patch = await git(root, ['diff', '--no-index', ...diffOptions, '--', '/dev/null', file], { limit: maxBytes - size, allowDifference: true });
+    const patch = await git(root, ['diff', '--no-index', ...diffOptions, '--', gitNullDevice, file], { limit: maxBytes - size, allowDifference: true });
     if (patch.includes('\0') || /^Binary files .* differ$/m.test(patch)) throw new WorkspaceError('PATCH_UNSUPPORTED', 'Binary new files cannot be represented as a textual task patch.');
     size += Buffer.byteLength(patch);
     if (size > maxBytes) throw new WorkspaceError('PATCH_TOO_LARGE', 'The task patch exceeds its byte limit.');

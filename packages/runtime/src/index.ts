@@ -11,3 +11,4 @@ export * from './pipeline.js';
 export * from './process-registry.js';
 export * from './process-state.js';
 export * from './auth-store.js';
+export * from './process-windows.js';

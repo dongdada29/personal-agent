@@ -3,6 +3,7 @@ import { realpath } from 'node:fs/promises';
 import type { VerificationCommand } from '@personal-agent/contracts';
 import { spawnOwnedProcess, type ProcessContext, type ProcessLifecycleHooks } from './process-registry.js';
 import { EngineError } from './engine.js';
+import { resolveWindowsCommand } from './process-windows.js';
 
 export interface VerificationExecution {
   command: string;
@@ -87,8 +88,25 @@ export async function runVerification(options: RunVerificationOptions): Promise<
   let cancelled = options.signal?.aborted ?? false;
   let exitCode: number | null = null;
   let exitSignal: NodeJS.Signals | null = null;
+  const env = verificationEnvironment();
+  let executable = { command, args: [...args] };
+  if (process.platform === 'win32' && !cancelled) {
+    // shell:false 找不到 npm（实际是 npm.cmd）；解析为可直接执行的 .exe 或 node + npm-cli.js。
+    const resolved = resolveWindowsCommand(command, [...args], env);
+    if (!resolved) {
+      const finished = Date.now();
+      const missingPath = isAbsolute(command) || /[\\/]/u.test(command);
+      return { command, args: [...args], exitCode: null, signal: null, stdout: '',
+        stderr: missingPath
+          ? 'Verification command could not be started (ENOENT).\n'
+          : 'Verification command could not be started (ENOENT: not found on PATH, or a .cmd/.bat other than npm/npx).\n',
+        stdoutTruncated: false, stderrTruncated: false, timedOut: false, cancelled: false,
+        startedAt: new Date(started).toISOString(), finishedAt: new Date(finished).toISOString(), durationMs: finished - started };
+    }
+    executable = resolved;
+  }
   if (!cancelled) {
-    const owner = spawnOwnedProcess({ command, args: [...args], cwd, env: verificationEnvironment(), kind: 'verification', context: options.context });
+    const owner = spawnOwnedProcess({ command: executable.command, args: executable.args, cwd, env, kind: 'verification', context: options.context });
     const child = owner.process;
     child.stdin.end(); // Verification children receive EOF, as with stdin:'ignore'.
     child.stdout.on('data', (chunk: Buffer) => stdout.add(chunk));

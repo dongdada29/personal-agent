@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@novnc/novnc": "1.7.0",
     "@personal-agent/contracts": "0.1.0",
     "antd": "5.27.6",
     "react": "18.3.1",
