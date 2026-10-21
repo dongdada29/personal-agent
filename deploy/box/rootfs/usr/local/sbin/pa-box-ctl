@@ -2,10 +2,11 @@
 # pa-box-ctl：box 内的桌面控制命令，只由 server / 主机守护进程经 `docker exec -i pa-box pa-box-ctl ...` 以 root 调用。
 #
 #   pa-box-ctl status            输出一行 JSON：{"v":1,"max":3,"desktops":[{"id":"d1","running":true},...]}
-#   pa-box-ctl start dN          从 stdin 读取 43 字符令牌，写入网关令牌文件；桌面未运行则启动
+#   pa-box-ctl start dN          从 stdin 读取两行：43 字符令牌 + VNC 口令；写入网关令牌与 rfbauth；桌面未运行则启动
 #   pa-box-ctl stop dN           停止桌面并作废令牌
 #
 # 令牌只走 stdin：容器内 bot 共享 PID 命名空间，能看到彼此的命令行（L0 问题 8），所以绝不放进 argv / env。
+# 失败时清掉本次写入的临时 rfbauth 与尚未生效的网关令牌，避免留下 .vnc.XXXXXX 和半成品 token。
 #
 # 退出码：0 成功；64 参数错误；65 令牌格式错误；66 达到桌面上限；70 启动失败；71 桌面监听了 TCP（已停止）。
 set -euo pipefail
@@ -15,6 +16,8 @@ export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 max="${PA_BOX_MAX_DESKTOPS:-3}"
 [[ "$max" =~ ^[1-9]$ ]] || { echo "invalid PA_BOX_MAX_DESKTOPS" >&2; exit 64; }
+# 测试可覆盖；生产默认 /run/pa-box。
+run_dir="${PA_BOX_RUN_DIR:-/run/pa-box}"
 
 desktop_number() {
   local id="${1:-}"
@@ -36,46 +39,88 @@ write_token() {
   local n="$1" token tmp
   IFS= read -r -t 5 token || true
   [[ "$token" =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo "invalid token" >&2; exit 65; }
-  tmp="$(mktemp "/run/pa-box/gate/.d${n}.XXXXXX")"
+  tmp="$(mktemp "${run_dir}/gate/.d${n}.XXXXXX")"
   printf '%s' "$token" >"$tmp"
   unset token
-  chown root:pa-gate "$tmp"
+  chown root:pa-gate "$tmp" 2>/dev/null || true
   chmod 0640 "$tmp"
-  mv -f "$tmp" "/run/pa-box/gate/d${n}.token"
+  mv -f "$tmp" "${run_dir}/gate/d${n}.token"
+}
+
+# VNC 口令只走 stdin 第二行。已在运行的桌面保留原 rfbauth（Xvnc 不会热加载新口令）。
+write_vnc_password() {
+  local n="$1" password passwd_file tmp
+  IFS= read -r -t 5 password || true
+  [[ ${#password} -ge 8 && "$password" != *$'\n'* ]] || { echo "invalid vnc password" >&2; exit 65; }
+  passwd_file="${run_dir}/d${n}/vnc.passwd"
+  if [ -f "$passwd_file" ] && is_running "$n"; then
+    unset password
+    return 0
+  fi
+  if [ ! -x /usr/bin/vncpasswd ]; then
+    unset password
+    echo "vncpasswd is missing; install tigervnc-tools" >&2
+    exit 70
+  fi
+  tmp="$(mktemp "${run_dir}/d${n}/.vnc.XXXXXX")"
+  if ! printf '%s\n' "$password" | /usr/bin/vncpasswd -f >"$tmp"; then
+    rm -f "$tmp"
+    unset password
+    echo "failed to write vnc password" >&2
+    exit 70
+  fi
+  unset password
+  chown "bot${n}:bot${n}" "$tmp" 2>/dev/null || true
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$passwd_file"
 }
 
 stop_desktop() {
   local n="$1"
-  rm -f "/run/pa-box/gate/d${n}.token"
+  rm -f "${run_dir}/gate/d${n}.token" "${run_dir}/d${n}/vnc.passwd" "${run_dir}/d${n}/.vnc."*
+  pgrep -u "bot${n}" >/dev/null 2>&1 || { rm -f "${run_dir}/d${n}/vnc.sock" "/tmp/.X11-unix/X${n}" "/tmp/.X${n}-lock"; return 0; }
   pkill -TERM -u "bot${n}" >/dev/null 2>&1 || true
   for _ in $(seq 1 50); do pgrep -u "bot${n}" >/dev/null 2>&1 || break; sleep 0.2; done
   pkill -KILL -u "bot${n}" >/dev/null 2>&1 || true
-  rm -f "/run/pa-box/d${n}/vnc.sock" "/tmp/.X11-unix/X${n}" "/tmp/.X${n}-lock"
+  rm -f "${run_dir}/d${n}/vnc.sock" "/tmp/.X11-unix/X${n}" "/tmp/.X${n}-lock"
 }
 
 start_desktop() {
-  local n="$1" user="bot$1"
-  if is_running "$n"; then write_token "$n"; return 0; fi
+  local n="$1" user="bot$1" ready=0
+  cleanup_failed_start() {
+    rm -f "${run_dir}/d${n}/.vnc."*
+    if (( ready == 0 )); then
+      rm -f "${run_dir}/gate/d${n}.token"
+      if ! is_running "$n"; then
+        rm -f "${run_dir}/d${n}/vnc.passwd"
+      fi
+    fi
+  }
+  trap cleanup_failed_start EXIT
+  if is_running "$n"; then write_token "$n"; write_vnc_password "$n"; ready=1; trap - EXIT; return 0; fi
   # 硬上限由镜像里的用户数决定；server 侧还会按并发策略、内存压力与预算先行拒绝。
   if (( $(running_count) >= max )); then echo "desktop limit reached" >&2; exit 66; fi
   write_token "$n"
-  rm -f "/run/pa-box/d${n}/vnc.sock" "/tmp/.X11-unix/X${n}" "/tmp/.X${n}-lock"
+  write_vnc_password "$n"
+  rm -f "${run_dir}/d${n}/vnc.sock" "/tmp/.X11-unix/X${n}" "/tmp/.X${n}-lock"
   setsid setpriv --reuid="$user" --regid="$user" --init-groups \
     env -i HOME="/home/${user}" USER="$user" LOGNAME="$user" SHELL=/bin/bash \
       PATH=/usr/bin:/bin LANG=C.UTF-8 \
-      PA_BOX_DISPLAY=":${n}" PA_BOX_SOCKET="/run/pa-box/d${n}/vnc.sock" \
+      PA_BOX_DISPLAY=":${n}" PA_BOX_SOCKET="${run_dir}/d${n}/vnc.sock" \
     /bin/bash --noprofile --norc /usr/local/lib/pa-box/start-desktop.sh </dev/null >/dev/null 2>&1 &
   for _ in $(seq 1 150); do
-    [ -S "/run/pa-box/d${n}/vnc.sock" ] && is_running "$n" && break
+    [ -S "${run_dir}/d${n}/vnc.sock" ] && is_running "$n" && break
     sleep 0.1
   done
-  if ! [ -S "/run/pa-box/d${n}/vnc.sock" ]; then stop_desktop "$n"; echo "desktop failed to start" >&2; exit 70; fi
+  if ! [ -S "${run_dir}/d${n}/vnc.sock" ]; then stop_desktop "$n"; echo "desktop failed to start" >&2; exit 70; fi
   # 校验：桌面的 Xvnc 不得监听任何 TCP 端口（只允许 unix socket）。
   local pid
   pid="$(pgrep -u "$user" -x Xvnc | head -n 1)"
   if ! /usr/bin/python3 -I /usr/local/lib/pa-box/no-tcp-listen.py "$pid"; then
     stop_desktop "$n"; echo "desktop listened on TCP; stopped" >&2; exit 71
   fi
+  ready=1
+  trap - EXIT
 }
 
 status() {

@@ -26,8 +26,10 @@ unset cookie
 
 rm -f "$socket"
 # -rfbport -1：不监听 TCP；-rfbunixpath：只监听 unix socket，权限 0660（属组 pa-gate 来自目录 setgid）。
-# -SecurityTypes None 只在 unix socket 上：访问控制由 socket 权限 + 网关令牌 + server 鉴权承担，
-#  不使用弱的 VncAuth（8 位 DES 口令）。-localhost 是额外兜底。
+# VncAuth 口令由 pa-box-ctl 写入 /run/pa-box/dN/vnc.passwd（0600，仅 botN 可读）。
+# 口令从不出现在 argv / 环境变量 / 日志。Xvnc 只监听 unix socket，-localhost 是额外兜底。
+passwd_file="/run/pa-box/d${number}/vnc.passwd"
+[ -f "$passwd_file" ] || { echo "missing vnc passwd"; exit 70; }
 Xvnc "$display" \
   -auth "$XAUTHORITY" \
   -nolisten tcp \
@@ -35,7 +37,8 @@ Xvnc "$display" \
   -localhost \
   -rfbunixpath "$socket" \
   -rfbunixmode 0660 \
-  -SecurityTypes None \
+  -SecurityTypes VncAuth \
+  -rfbauth "$passwd_file" \
   -AlwaysShared \
   -geometry 1600x900 \
   -depth 24 \

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { processAlive } from '@personal-agent/runtime';
+import { ensurePrivateDirectory, processAlive } from '@personal-agent/runtime';
 
 const locked = () => Object.assign(new Error('Data directory owner or recovery lock needs inspection'), { code: 'INSTANCE_LOCKED' });
 function isDefinitelyGone(pid: unknown): boolean {
@@ -15,7 +15,7 @@ function isDefinitelyGone(pid: unknown): boolean {
 
 /** Ownership precedes recovery. Live, reused, malformed, or ambiguous PIDs block. */
 export function acquireInstanceLock(dataDir: string): () => void {
-  mkdirSync(dataDir, { recursive: true });
+  ensurePrivateDirectory(dataDir);
   const path = join(dataDir, 'service.lock');
   let descriptor: number;
   try { descriptor = openSync(path, 'wx', 0o600); }

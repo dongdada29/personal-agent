@@ -488,6 +488,14 @@ export interface AuthSecurityConfig {
   allowInsecureLocalhost?: boolean;
 }
 
+/** 设备权限：operator 可写可控制桌面；observer 只读、桌面只能看。 */
+export type DeviceRole = 'operator' | 'observer';
+/** Ed25519 客户端设备的生命周期。Cookie 配对设备只有 approved / revoked。 */
+export type DeviceStatus = 'pending' | 'approved' | 'rejected' | 'revoked';
+/** 设备被批准的原因：托管桌面、本机回环浏览器，或操作员手动批准。 */
+export type DeviceTrust = 'desktop' | 'loopback' | 'manual';
+export type DeviceKind = 'desktop' | 'browser';
+
 /** Public device metadata; session and CSRF hashes remain server-side. */
 export interface Device {
   id: string;
@@ -495,6 +503,55 @@ export interface Device {
   createdAt: string;
   expiresAt: string;
   revokedAt: string | null;
+  role?: DeviceRole;
+  status?: DeviceStatus;
+}
+
+/**
+ * Ed25519 客户端设备（桌面客户端 / 第二个客户端 / 经 Tunnel 的浏览器）。
+ * 公钥只用于校验签名，列表接口会返回以便操作员核对指纹。
+ */
+export interface ClientDevice {
+  id: string;
+  name: string;
+  publicKey: string;
+  role: DeviceRole;
+  status: DeviceStatus;
+  trust: DeviceTrust;
+  kind: DeviceKind;
+  createdAt: string;
+  updatedAt: string;
+  approvedAt: string | null;
+  revokedAt: string | null;
+  lastSeenAt: string | null;
+}
+
+export interface DeviceChallenge {
+  challenge: string;
+  expiresAt: string;
+}
+
+export interface DeviceConnectRequest {
+  publicKey: string;
+  name: string;
+  kind: DeviceKind;
+  challenge: string;
+  signedAt: number;
+  signature: string;
+}
+
+export interface DeviceConnectResult {
+  device: ClientDevice;
+  deviceSession: string;
+  role: DeviceRole;
+}
+
+export interface DesktopStreamTicket {
+  ticket: string;
+  expiresAt: string;
+  control: boolean;
+  deploymentId: string;
+  desktopId: string;
 }
 
 export interface AuthSession {
@@ -508,6 +565,10 @@ export interface AuthSession {
    * (per-launch token mode). The token itself is never exposed to the renderer.
    */
   desktop?: true;
+  /** 当前连接的权限；隐式回环操作员为 operator。 */
+  role?: DeviceRole;
+  /** 已识别的 Ed25519 客户端设备（已批准后出现）。 */
+  clientDevice?: ClientDevice;
 }
 
 // ---------------------------------------------------------------------------

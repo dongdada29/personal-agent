@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -23,6 +23,13 @@ afterEach(() => {
 });
 
 describe('persistent task store', () => {
+  it('tightens the data directory to 0700 and the sqlite file to 0600', () => {
+    if (process.platform === 'win32') return;
+    const { filename } = fixture();
+    expect(statSync(filename).mode & 0o777).toBe(0o600);
+    expect(statSync(join(filename, '..')).mode & 0o777).toBe(0o700);
+  });
+
   it('migrates once, commits an attempt and artifact, and retains cursor after reopening', () => {
     const { filename, store } = fixture();
     const created = store.create({ commandId: 'persist-1', goal: 'Build a demo' }).task;
@@ -40,7 +47,7 @@ describe('persistent task store', () => {
     expect(before.artifacts[0].content).toBe('# Complete');
     expect(before.events.map(e => e.seq)).toEqual([...before.events.map(e => e.seq)].sort((a, b) => a - b));
     const db = new DatabaseSync(filename);
-    expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()?.count).toBe(4);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()?.count).toBe(5);
     expect(db.prepare('PRAGMA journal_mode').get()?.journal_mode).toBe('wal');
     expect(db.prepare('SELECT status FROM attempts').get()?.status).toBe('completed');
     db.close();

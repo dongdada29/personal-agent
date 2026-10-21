@@ -18,12 +18,14 @@ function policyText(deployment: BoxDeployment): string {
   return `并发 ${concurrent}/${max} · 每桌面 ${formatBytes(budgetBytesPerDesktop)} · 空闲 ${idleStopMinutes} 分钟停止`;
 }
 
-function DesktopRow({ deployment, desktop, busy, fakeDemo, onStart, onStop, onOpen }: {
-  deployment: BoxDeployment; desktop: BoxDesktop; busy: boolean; fakeDemo: boolean;
+function DesktopRow({ deployment, desktop, busy, fakeDemo, readOnly, onStart, onStop, onOpen }: {
+  deployment: BoxDeployment; desktop: BoxDesktop; busy: boolean; fakeDemo: boolean; readOnly: boolean;
   onStart: () => void; onStop: () => void; onOpen: () => void;
 }) {
   const start = canStartDesktop(deployment, desktop);
   const running = desktop.state === 'running';
+  // 只读设备可以打开画面（服务端会丢掉键鼠），但不能启停容器。
+  const mutate = busy || fakeDemo || readOnly;
   return <div className="box-desktop">
     <div>
       <strong>{desktop.label}</strong>
@@ -32,12 +34,13 @@ function DesktopRow({ deployment, desktop, busy, fakeDemo, onStart, onStop, onOp
         {desktop.viewers ? ` · ${desktop.viewers} 人查看` : ''}
         {desktop.idleStopAt ? ` · ${formatRelative(desktop.idleStopAt)} 空闲停止` : ''}
         {desktop.streamable ? '' : ' · 不可串流'}
+        {readOnly ? ' · 只读观看' : ''}
       </div>
     </div>
     <div className="box-actions">
       {running
-        ? <Button size="small" disabled={busy || fakeDemo} onClick={onStop}>停止</Button>
-        : <Button size="small" disabled={busy || fakeDemo || !start.ok} title={start.ok ? undefined : start.reason} onClick={onStart}>启动</Button>}
+        ? <Button size="small" disabled={mutate} onClick={onStop}>停止</Button>
+        : <Button size="small" disabled={mutate || !start.ok} title={start.ok ? undefined : start.reason} onClick={onStart}>启动</Button>}
       <Button size="small" type="primary" disabled={busy || fakeDemo || (!running && !start.ok) || !desktop.streamable}
         title={!desktop.streamable ? '只能经服务端鉴权代理打开，容器未就绪或未通过安全校验' : undefined}
         onClick={onOpen}>打开桌面</Button>
@@ -45,8 +48,8 @@ function DesktopRow({ deployment, desktop, busy, fakeDemo, onStart, onStop, onOp
   </div>;
 }
 
-function DeploymentCard({ deployment, fakeDemo, busy, onAction, onStartDesktop, onStopDesktop, onOpenDesktop, onTicket, onRemove }: {
-  deployment: BoxDeployment; fakeDemo: boolean; busy: boolean;
+function DeploymentCard({ deployment, fakeDemo, readOnly, busy, onAction, onStartDesktop, onStopDesktop, onOpenDesktop, onTicket, onRemove }: {
+  deployment: BoxDeployment; fakeDemo: boolean; readOnly: boolean; busy: boolean;
   onAction: (action: BoxAction) => void;
   onStartDesktop: (desktop: BoxDesktop) => void;
   onStopDesktop: (desktop: BoxDesktop) => void;
@@ -83,23 +86,23 @@ function DeploymentCard({ deployment, fakeDemo, busy, onAction, onStartDesktop, 
     {deployment.operation && !deployment.operation.finishedAt && <p className="field-hint">{actionLabels[deployment.operation.action]} 正在执行…</p>}
     {deployment.operation?.errorCode && <Alert type="error" showIcon message={boxErrorMessages[deployment.operation.errorCode] ?? deployment.operation.errorCode} />}
     <div className="box-actions">
-      {deployment.actions.map(action => <Button key={action} size="small" disabled={busy || fakeDemo} onClick={() => onAction(action)}>{actionLabels[action]}</Button>)}
+      {deployment.actions.map(action => <Button key={action} size="small" disabled={busy || fakeDemo || readOnly} onClick={() => onAction(action)}>{actionLabels[action]}</Button>)}
       {deployment.kind === 'cloud' && deployment.connection === 'agent' && !deployment.fake &&
-        <Button size="small" disabled={busy || fakeDemo} onClick={onTicket}>签发注册票据</Button>}
+        <Button size="small" disabled={busy || fakeDemo || readOnly} onClick={onTicket}>签发注册票据</Button>}
       {deployment.kind === 'cloud' && !deployment.fake &&
-        <Button size="small" danger disabled={busy || fakeDemo} onClick={onRemove}>移除</Button>}
+        <Button size="small" danger disabled={busy || fakeDemo || readOnly} onClick={onRemove}>移除</Button>}
     </div>
     <div className="box-desktops" aria-label="桌面">
       {deployment.desktops.length === 0
         ? <p className="field-hint">容器运行后会出现桌面 1–3。</p>
         : deployment.desktops.map(desktop => <DesktopRow key={desktop.id} deployment={deployment} desktop={desktop}
-          busy={busy} fakeDemo={fakeDemo}
+          busy={busy} fakeDemo={fakeDemo} readOnly={readOnly}
           onStart={() => onStartDesktop(desktop)} onStop={() => onStopDesktop(desktop)} onOpen={() => onOpenDesktop(desktop)} />)}
     </div>
   </Card>;
 }
 
-export function BoxPanel({ fakeDemo = false }: { fakeDemo?: boolean }) {
+export function BoxPanel({ fakeDemo = false, readOnly = false }: { fakeDemo?: boolean; readOnly?: boolean }) {
   const [deployments, setDeployments] = useState<BoxDeployment[]>([]);
   const [platform, setPlatform] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -197,7 +200,7 @@ export function BoxPanel({ fakeDemo = false }: { fakeDemo?: boolean }) {
         <div>
           <h2 className="box-section-title" id="box-title">本机</h2>
           {local.length === 0 ? <Empty description={platform ? `当前平台（${platform}）没有本机适配器。` : '没有本机部署'} /> :
-            local.map(item => <DeploymentCard key={item.id} deployment={item} fakeDemo={fakeDemo} busy={busy}
+            local.map(item => <DeploymentCard key={item.id} deployment={item} fakeDemo={fakeDemo} readOnly={readOnly} busy={busy}
               onAction={action => void run(async () => { const key = commands.current.key(`action:${item.id}`, action); await api.boxAction(item.id, { commandId: commands.current.id(key), action }); commands.current.complete(key); })}
               onStartDesktop={desktop => void run(async () => { const key = commands.current.key(`desktop-start:${item.id}`, desktop.id); await api.startBoxDesktop(item.id, desktop.id, { commandId: commands.current.id(key) }); commands.current.complete(key); })}
               onStopDesktop={desktop => void run(async () => { const key = commands.current.key(`desktop-stop:${item.id}`, desktop.id); await api.stopBoxDesktop(item.id, desktop.id, { commandId: commands.current.id(key) }); commands.current.complete(key); })}
@@ -205,7 +208,7 @@ export function BoxPanel({ fakeDemo = false }: { fakeDemo?: boolean }) {
         </div>
         <div>
           <h2 className="box-section-title">云端</h2>
-          {cloud.map(item => <DeploymentCard key={item.id} deployment={item} fakeDemo={fakeDemo} busy={busy}
+          {cloud.map(item => <DeploymentCard key={item.id} deployment={item} fakeDemo={fakeDemo} readOnly={readOnly} busy={busy}
             onAction={action => void run(async () => { const key = commands.current.key(`action:${item.id}`, action); await api.boxAction(item.id, { commandId: commands.current.id(key), action }); commands.current.complete(key); })}
             onStartDesktop={desktop => void run(async () => { const key = commands.current.key(`desktop-start:${item.id}`, desktop.id); await api.startBoxDesktop(item.id, desktop.id, { commandId: commands.current.id(key) }); commands.current.complete(key); })}
             onStopDesktop={desktop => void run(async () => { const key = commands.current.key(`desktop-stop:${item.id}`, desktop.id); await api.stopBoxDesktop(item.id, desktop.id, { commandId: commands.current.id(key) }); commands.current.complete(key); })}
@@ -215,19 +218,19 @@ export function BoxPanel({ fakeDemo = false }: { fakeDemo?: boolean }) {
           <Card className="box-card" bordered={false} title="添加云端主机">
             <p className="field-hint">凭据不要写入仓库或粘贴到这里。SSH 使用本机 ssh 配置中的 Host 别名；主机守护进程用一次性票据从云主机向外连接。</p>
             <label className="input-label" htmlFor="box-name">名称</label>
-            <Input id="box-name" value={form.name} maxLength={100} disabled={busy || fakeDemo} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="例如：开发机" />
+            <Input id="box-name" value={form.name} maxLength={100} disabled={busy || fakeDemo || readOnly} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="例如：开发机" />
             <label className="input-label" htmlFor="box-provider">服务商标签（可选）</label>
-            <Input id="box-provider" value={form.providerLabel} maxLength={64} disabled={busy || fakeDemo} onChange={event => setForm({ ...form, providerLabel: event.target.value })} placeholder="例如：云厂商机型名" />
+            <Input id="box-provider" value={form.providerLabel} maxLength={64} disabled={busy || fakeDemo || readOnly} onChange={event => setForm({ ...form, providerLabel: event.target.value })} placeholder="例如：云厂商机型名" />
             <label className="input-label">连接方式</label>
-            <Radio.Group value={form.connection} disabled={busy || fakeDemo} onChange={event => setForm({ ...form, connection: event.target.value })}>
+            <Radio.Group value={form.connection} disabled={busy || fakeDemo || readOnly} onChange={event => setForm({ ...form, connection: event.target.value })}>
               <Radio value="agent">主机守护进程（一次性票据）</Radio>
               <Radio value="ssh">SSH</Radio>
             </Radio.Group>
             <label className="input-label" htmlFor="box-endpoint">{form.connection === 'ssh' ? 'ssh 配置 Host 别名' : '展示用主机名（可选）'}</label>
-            <Input id="box-endpoint" value={form.endpoint} maxLength={260} disabled={busy || fakeDemo} onChange={event => setForm({ ...form, endpoint: event.target.value })} placeholder={form.connection === 'ssh' ? 'pa-cloud' : '可选'} autoComplete="off" />
+            <Input id="box-endpoint" value={form.endpoint} maxLength={260} disabled={busy || fakeDemo || readOnly} onChange={event => setForm({ ...form, endpoint: event.target.value })} placeholder={form.connection === 'ssh' ? 'pa-cloud' : '可选'} autoComplete="off" />
             <label className="input-label" htmlFor="box-auth">凭据引用（可选）</label>
-            <Input id="box-auth" value={form.authRef} maxLength={160} disabled={busy || fakeDemo} onChange={event => setForm({ ...form, authRef: event.target.value })} placeholder="ssh-config:pa-cloud" autoComplete="off" />
-            <Button className="settings-save" type="primary" disabled={busy || fakeDemo || !form.name.trim() || (form.connection === 'ssh' && !form.endpoint.trim())} onClick={() => void addCloud()}>添加</Button>
+            <Input id="box-auth" value={form.authRef} maxLength={160} disabled={busy || fakeDemo || readOnly} onChange={event => setForm({ ...form, authRef: event.target.value })} placeholder="ssh-config:pa-cloud" autoComplete="off" />
+            <Button className="settings-save" type="primary" disabled={busy || fakeDemo || readOnly || !form.name.trim() || (form.connection === 'ssh' && !form.endpoint.trim())} onClick={() => void addCloud()}>添加</Button>
           </Card>
         </div>
       </div>
@@ -238,6 +241,6 @@ export function BoxPanel({ fakeDemo = false }: { fakeDemo?: boolean }) {
       {ticketCommand ? <pre className="pair-link">{ticketCommand}</pre>
         : <Alert type="warning" showIcon message="当前页面不是 HTTPS 公开地址。主机守护进程需要能访问 paired 实例的 https 源；本机 loopback 或桌面客户端请改用 SSH 连接，或先配置 paired 访问。" />}
     </Modal>}
-    {viewer && <VncViewer {...viewer} onClose={() => setViewer(null)} />}
+    {viewer && <VncViewer {...viewer} viewOnly={readOnly} onClose={() => setViewer(null)} />}
   </section>;
 }

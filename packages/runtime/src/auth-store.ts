@@ -1,12 +1,15 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createRequire } from 'node:module';
-import type { AuthSecurityConfig, Device, PairingTicket } from '@personal-agent/contracts';
+import type { AuthSecurityConfig, ClientDevice, Device, DeviceKind, DeviceRole, PairingTicket } from '@personal-agent/contracts';
+import { DEVICE_ID_PATTERN, DEVICE_PUBLIC_KEY_PATTERN, deviceIdFromPublicKey } from './device-crypto.js';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 type Row = Record<string, unknown>;
 const ticketLifetimeMs = 5 * 60_000;
 const sessionLifetimeMs = 30 * 24 * 60 * 60_000;
+const deviceSessionLifetimeMs = 30 * 24 * 60 * 60_000;
 const tokenPattern = /^[a-zA-Z0-9_-]{43}$/;
+const SCHEMA_VERSION = 5;
 
 export class AuthStoreError extends Error {
   constructor(public readonly code: string, message: string, public readonly statusCode: number) {
@@ -24,8 +27,26 @@ const csrfFor = (session: string) => createHash('sha256')
 const timestamp = (value: unknown) => new Date(Number(value)).toISOString();
 
 function deviceFrom(row: Row): Device {
+  // Cookie 配对设备保持原公开字段，避免把 v5 的 client_devices 角色混进旧会话。
   return { id: String(row.id), name: String(row.name), createdAt: timestamp(row.created_at), expiresAt: timestamp(row.expires_at),
     revokedAt: row.revoked_at === null ? null : timestamp(row.revoked_at) };
+}
+
+function clientDeviceFrom(row: Row): ClientDevice {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    publicKey: String(row.public_key),
+    role: row.role === 'observer' ? 'observer' : 'operator',
+    status: row.status === 'approved' || row.status === 'rejected' || row.status === 'revoked' ? row.status : 'pending',
+    trust: row.trust === 'desktop' || row.trust === 'loopback' ? row.trust : 'manual',
+    kind: row.kind === 'desktop' ? 'desktop' : 'browser',
+    createdAt: timestamp(row.created_at),
+    updatedAt: timestamp(row.updated_at),
+    approvedAt: row.approved_at === null || row.approved_at === undefined ? null : timestamp(row.approved_at),
+    revokedAt: row.revoked_at === null || row.revoked_at === undefined ? null : timestamp(row.revoked_at),
+    lastSeenAt: row.last_seen_at === null || row.last_seen_at === undefined ? null : timestamp(row.last_seen_at),
+  };
 }
 
 function equalDigest(left: string, right: unknown): boolean {
@@ -60,7 +81,7 @@ export class AuthStore {
     try {
       this.db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
       const version = Number((this.db.prepare('SELECT COALESCE(MAX(version),0) AS version FROM schema_migrations').get() as Row).version);
-      if (version !== 4) throw new Error('Authentication requires TaskStore schema migration version exactly 4');
+      if (version !== SCHEMA_VERSION) throw new Error(`Authentication requires TaskStore schema migration version exactly ${SCHEMA_VERSION}`);
     } catch (error) { this.db.close(); throw error; }
   }
 
@@ -227,5 +248,147 @@ export class AuthStore {
     this.listeners.clear();
     try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* still close */ }
     this.db.close();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ed25519 客户端设备（v5）。与 Cookie 配对设备分开存，互不影响。
+  // ---------------------------------------------------------------------------
+
+  private hashDeviceSession(value: string): string {
+    return hash('session', `device-session:${value}`);
+  }
+
+  clientDevices(): ClientDevice[] {
+    return (this.db.prepare('SELECT * FROM client_devices ORDER BY created_at,rowid').all() as Row[]).map(clientDeviceFrom);
+  }
+
+  clientDevice(id: string): ClientDevice | null {
+    if (typeof id !== 'string' || !DEVICE_ID_PATTERN.test(id)) return null;
+    const row = this.db.prepare('SELECT * FROM client_devices WHERE id=?').get(id) as Row | undefined;
+    return row ? clientDeviceFrom(row) : null;
+  }
+
+  /**
+   * 登记或刷新一台出示了有效签名的设备。
+   * autoApprove 为 true 时直接批准（托管桌面或本机回环浏览器）；否则进入 pending。
+   * 已被拒绝 / 撤销的设备再次连接会开一条新的 pending（不静默复活）。
+   */
+  registerClientDevice(input: {
+    publicKey: string;
+    name: string;
+    kind: DeviceKind;
+    autoApprove: boolean;
+    trust?: ClientDevice['trust'];
+    role?: DeviceRole;
+  }): { device: ClientDevice; created: boolean } {
+    if (!DEVICE_PUBLIC_KEY_PATTERN.test(input.publicKey)) {
+      throw new AuthStoreError('DEVICE_IDENTITY_INVALID', 'Device public key is invalid', 400);
+    }
+    if (typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 100 || input.name.includes('\0')) {
+      throw new AuthStoreError('BAD_AUTH_REQUEST', 'Device name is invalid', 400);
+    }
+    if (input.kind !== 'desktop' && input.kind !== 'browser') {
+      throw new AuthStoreError('BAD_AUTH_REQUEST', 'Device kind is invalid', 400);
+    }
+    const id = deviceIdFromPublicKey(input.publicKey);
+    return this.transaction(() => {
+      const now = this.now();
+      const existing = this.db.prepare('SELECT * FROM client_devices WHERE id=?').get(id) as Row | undefined;
+      const name = input.name.trim();
+      if (!existing) {
+        const status = input.autoApprove ? 'approved' : 'pending';
+        const trust = input.autoApprove ? (input.trust ?? 'loopback') : 'manual';
+        const role = input.autoApprove ? (input.role ?? 'operator') : 'observer';
+        this.db.prepare('INSERT INTO client_devices VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(id, input.publicKey, name, role, status, trust, input.kind, now, now,
+            input.autoApprove ? now : null, null, now);
+        return { device: this.clientDevice(id)!, created: true };
+      }
+      if (String(existing.public_key) !== input.publicKey) {
+        throw new AuthStoreError('DEVICE_IDENTITY_CONFLICT', 'Device identity does not match the stored public key', 409);
+      }
+      if (existing.status === 'approved' && existing.revoked_at === null) {
+        this.db.prepare('UPDATE client_devices SET name=?, kind=?, last_seen_at=?, updated_at=? WHERE id=?')
+          .run(name, input.kind, now, now, id);
+        return { device: this.clientDevice(id)!, created: false };
+      }
+      // 拒绝 / 撤销后重新申请：回到 pending，等待操作员再次批准。不自动恢复权限。
+      this.db.prepare('UPDATE client_devices SET name=?, kind=?, role=?, status=?, trust=?, updated_at=?, approved_at=NULL, revoked_at=NULL, last_seen_at=? WHERE id=?')
+        .run(name, input.kind, input.autoApprove ? (input.role ?? 'operator') : 'observer',
+          input.autoApprove ? 'approved' : 'pending',
+          input.autoApprove ? (input.trust ?? 'loopback') : 'manual', now, now, id);
+      return { device: this.clientDevice(id)!, created: false };
+    });
+  }
+
+  issueDeviceSession(deviceId: string): { device: ClientDevice; deviceSession: string } {
+    if (!DEVICE_ID_PATTERN.test(deviceId)) throw new AuthStoreError('DEVICE_NOT_FOUND', 'Device not found', 404);
+    return this.transaction(() => {
+      const now = this.now();
+      const row = this.db.prepare('SELECT * FROM client_devices WHERE id=?').get(deviceId) as Row | undefined;
+      if (!row || row.status !== 'approved' || row.revoked_at !== null) {
+        throw new AuthStoreError('PAIRING_REQUIRED', 'This device is not approved', 403);
+      }
+      const deviceSession = secret();
+      const expires = now + deviceSessionLifetimeMs;
+      this.db.prepare('INSERT INTO client_device_sessions VALUES (?,?,?,?)')
+        .run(this.hashDeviceSession(deviceSession), deviceId, now, expires);
+      this.db.prepare('UPDATE client_devices SET last_seen_at=?, updated_at=? WHERE id=?').run(now, now, deviceId);
+      return { device: clientDeviceFrom({ ...row, last_seen_at: now, updated_at: now }), deviceSession };
+    });
+  }
+
+  authenticateClientSession(deviceSession: string): ClientDevice | null {
+    if (typeof deviceSession !== 'string' || !tokenPattern.test(deviceSession)) return null;
+    const row = this.db.prepare(`SELECT d.* FROM client_device_sessions s JOIN client_devices d ON d.id=s.device_id
+      WHERE s.session_hash=?`).get(this.hashDeviceSession(deviceSession)) as Row | undefined;
+    if (!row || row.status !== 'approved' || row.revoked_at !== null) return null;
+    const session = this.db.prepare('SELECT expires_at FROM client_device_sessions WHERE session_hash=?')
+      .get(this.hashDeviceSession(deviceSession)) as Row | undefined;
+    if (!session || !Number.isSafeInteger(session.expires_at) || Number(session.expires_at) <= this.now()) return null;
+    return clientDeviceFrom(row);
+  }
+
+  decideClientDevice(id: string, decision: 'approved' | 'rejected' | 'revoked', role: DeviceRole | undefined, commandId: string, issuer?: string): ClientDevice {
+    if (!DEVICE_ID_PATTERN.test(id)) throw new AuthStoreError('DEVICE_NOT_FOUND', 'Device not found', 404);
+    if (decision === 'approved' && role !== 'operator' && role !== 'observer') {
+      throw new AuthStoreError('BAD_AUTH_REQUEST', 'An approved device needs an explicit role', 400);
+    }
+    const request = JSON.stringify({ action: `client_device_${decision}`, id, role: role ?? null, issuer: issuer ?? null });
+    return this.transaction(invalidations => {
+      const now = this.now();
+      this.requireIssuer(issuer, now);
+      const replay = this.command<ClientDevice>(commandId, request);
+      if (replay) return replay;
+      const row = this.db.prepare('SELECT * FROM client_devices WHERE id=?').get(id) as Row | undefined;
+      if (!row) throw new AuthStoreError('DEVICE_NOT_FOUND', 'Device not found', 404);
+      if (decision === 'approved') {
+        // 上面已校验 role；这里再收窄一次，避免 SQLite 绑定收到 undefined。
+        if (role !== 'operator' && role !== 'observer') {
+          throw new AuthStoreError('BAD_AUTH_REQUEST', 'An approved device needs an explicit role', 400);
+        }
+        this.db.prepare('UPDATE client_devices SET status=?, role=?, trust=?, approved_at=?, revoked_at=NULL, updated_at=? WHERE id=?')
+          .run('approved', role, 'manual', now, now, id);
+      } else if (decision === 'rejected') {
+        this.db.prepare('UPDATE client_devices SET status=?, revoked_at=?, updated_at=? WHERE id=?')
+          .run('rejected', now, now, id);
+        this.db.prepare('DELETE FROM client_device_sessions WHERE device_id=?').run(id);
+        invalidations.push(id);
+      } else {
+        this.db.prepare('UPDATE client_devices SET status=?, revoked_at=?, updated_at=? WHERE id=?')
+          .run('revoked', now, now, id);
+        this.db.prepare('DELETE FROM client_device_sessions WHERE device_id=?').run(id);
+        invalidations.push(id);
+      }
+      const device = this.clientDevice(id)!;
+      this.saveCommand(commandId, request, device, now);
+      return device;
+    });
+  }
+
+  touchClientDevice(id: string): void {
+    if (!DEVICE_ID_PATTERN.test(id)) return;
+    const now = this.now();
+    this.db.prepare('UPDATE client_devices SET last_seen_at=? WHERE id=? AND status=? AND revoked_at IS NULL').run(now, id, 'approved');
   }
 }

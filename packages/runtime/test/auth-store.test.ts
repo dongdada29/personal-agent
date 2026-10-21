@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AuthSecurityConfig } from '@personal-agent/contracts';
 import { AuthStore } from '../src/auth-store.js';
+import { generateDeviceKeyPair } from '../src/device-crypto.js';
 import { TaskStore } from '../src/store.js';
 import { nodeEsmSpecifier } from '../src/process-windows.js';
 
@@ -93,8 +94,8 @@ afterEach(async () => {
 describe('persistent device authentication', () => {
   it('fails closed on a future database schema instead of opening an unknown authentication format', () => {
     const { filename, reader } = fixture();
-    reader().prepare('INSERT INTO schema_migrations VALUES (?,?)').run(5, new Date(baseTime).toISOString());
-    expect(() => new AuthStore(filename)).toThrow('schema migration version exactly 4');
+    reader().prepare('INSERT INTO schema_migrations VALUES (?,?)').run(6, new Date(baseTime).toISOString());
+    expect(() => new AuthStore(filename)).toThrow('schema migration version exactly 5');
   });
 
   it('fixes public paired policy without storing extra fields or permitting implicit changes', () => {
@@ -351,5 +352,35 @@ describe('persistent device authentication', () => {
     auth.revoke(target.device.id, 'fixed-revoke', owner.device.id);
     expect(() => auth.revoke(owner.device.id, 'fixed-revoke', owner.device.id)).toThrow(expect.objectContaining({ code: 'COMMAND_CONFLICT' }));
     expect(auth.isActive(owner.device.id)).toBe(true);
+  });
+});
+
+describe('Ed25519 client devices', () => {
+  it('persists pending devices until an operator approves them', () => {
+    const { auth, second } = fixture();
+    const keys = generateDeviceKeyPair();
+    const registered = auth.registerClientDevice({ publicKey: keys.publicKey, name: 'Second desktop', kind: 'desktop', autoApprove: false });
+    expect(registered.device.status).toBe('pending');
+    expect(registered.device.role).toBe('observer');
+    expect(() => auth.issueDeviceSession(registered.device.id)).toThrow(expect.objectContaining({ code: 'PAIRING_REQUIRED' }));
+    const approved = auth.decideClientDevice(registered.device.id, 'approved', 'observer', 'approve-1');
+    expect(approved.status).toBe('approved');
+    expect(approved.role).toBe('observer');
+    const session = second().issueDeviceSession(registered.device.id);
+    expect(second().authenticateClientSession(session.deviceSession)?.id).toBe(registered.device.id);
+    second().decideClientDevice(registered.device.id, 'revoked', undefined, 'revoke-1');
+    expect(second().authenticateClientSession(session.deviceSession)).toBeNull();
+  });
+
+  it('auto-approves a trusted desktop and does not store the session token in plaintext', () => {
+    const { auth, reader } = fixture();
+    const keys = generateDeviceKeyPair();
+    const registered = auth.registerClientDevice({
+      publicKey: keys.publicKey, name: 'Managed desktop', kind: 'desktop', autoApprove: true, trust: 'desktop', role: 'operator',
+    });
+    expect(registered.device).toMatchObject({ status: 'approved', trust: 'desktop', role: 'operator' });
+    const session = auth.issueDeviceSession(registered.device.id);
+    const rows = JSON.stringify(reader().prepare('SELECT * FROM client_device_sessions').all());
+    expect(rows).not.toContain(session.deviceSession);
   });
 });

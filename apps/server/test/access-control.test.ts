@@ -69,7 +69,7 @@ describe('paired HTTP access boundary', () => {
     const info = await result.app.inject({ url: '/api/session', headers: session.headers });
     expect(info.statusCode).toBe(200);
     expect(info.json()).toEqual({ mode: 'paired', device: session.device, csrfToken: session.csrf });
-    expect((await result.app.inject({ url: '/api/devices', headers: session.headers })).json()).toEqual({ devices: [session.device] });
+    expect((await result.app.inject({ url: '/api/devices', headers: session.headers })).json()).toEqual({ devices: [session.device], clientDevices: [] });
     expect((await result.app.inject({ url: '/api/health', headers: session.headers })).json().status).toBe('ok');
   });
 

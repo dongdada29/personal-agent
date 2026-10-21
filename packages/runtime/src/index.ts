@@ -11,4 +11,7 @@ export * from './pipeline.js';
 export * from './process-registry.js';
 export * from './process-state.js';
 export * from './auth-store.js';
+export * from './one-time-ticket-store.js';
+export * from './device-crypto.js';
 export * from './process-windows.js';
+export * from './private-fs.js';

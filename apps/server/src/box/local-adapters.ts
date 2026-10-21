@@ -117,8 +117,8 @@ export class ColimaAdapter implements HostAdapter {
     throw new BoxError('BOX_ACTION_UNSUPPORTED', '不支持的操作。', 400);
   }
 
-  desktop(op: DesktopOp, desktopId: string, token?: string): Promise<void> {
-    return this.docker.desktop(op, desktopId, token);
+  desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void> {
+    return this.docker.desktop(op, desktopId, token, password);
   }
 
   async openGate() {
@@ -230,8 +230,8 @@ export class Wsl2Adapter implements HostAdapter {
     throw new BoxError('BOX_ACTION_UNSUPPORTED', '不支持的操作。', 400);
   }
 
-  desktop(op: DesktopOp, desktopId: string, token?: string): Promise<void> {
-    return this.docker.desktop(op, desktopId, token);
+  desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void> {
+    return this.docker.desktop(op, desktopId, token, password);
   }
 
   openGate() {
@@ -299,9 +299,9 @@ export class LinuxContainerAdapter implements HostAdapter {
     throw new BoxError('BOX_ACTION_NOT_IMPLEMENTED', 'Linux 宿主没有 VM 层，不支持启停 VM。', 400);
   }
 
-  async desktop(op: DesktopOp, desktopId: string, token?: string): Promise<void> {
+  async desktop(op: DesktopOp, desktopId: string, token?: string, password?: string): Promise<void> {
     if (!this.engine) await this.status();
-    return this.box().desktop(op, desktopId, token);
+    return this.box().desktop(op, desktopId, token, password);
   }
 
   openGate() {

@@ -73,7 +73,7 @@ describe('read-only diagnostics and cold data backups', () => {
   it('restores a hash-verified private copy with tasks and events intact', () => {
     const { data, output, task } = fixture(); writeFileSync(join(data, 'evidence.txt'), 'retained evidence'); mkdirSync(join(data, 'empty-artifact-directory'));
     const original = readFileSync(join(data, 'personal-agent.sqlite'));
-    expect(coldBackup(data, output)).toMatchObject({ result: 'PASS', schemaVersion: 4, restoreScope: 'same-host', sourceDataPreserved: true });
+    expect(coldBackup(data, output)).toMatchObject({ result: 'PASS', schemaVersion: 5, restoreScope: 'same-host', sourceDataPreserved: true });
     // NTFS 忽略 mkdir mode；POSIX 上备份目录必须是 0700。
     if (process.platform !== 'win32') expect(statSync(output).mode & 0o777).toBe(0o700);
     expect(existsSync(join(data, 'service.lock'))).toBe(false);

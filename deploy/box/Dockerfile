@@ -27,7 +27,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates chromium fonts-dejavu-core fonts-noto-cjk openbox procps python3 \
-      tigervnc-standalone-server tini util-linux xauth \
+      tigervnc-standalone-server tigervnc-tools tini util-linux xauth \
  && rm -rf /var/lib/apt/lists/*
 
 # 固定 UID/GID：命名卷 pa-box-home 在重建容器后仍保留，属主必须稳定。
