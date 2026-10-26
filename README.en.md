@@ -134,6 +134,7 @@ npm exec --yes --package playwright -- node scripts/capture-demo-assets.mjs
 | Device access | explicit paired mode, one-time pairing, CSRF protection, and device revocation; loopback by default |
 | Desktop client | Electron hosts the bundled server or connects to `127.0.0.1:47801`; see [desktop client](docs/desktop.md) |
 | Linux cloud computer | local Colima (default 2 vCPU / 4 GiB / 40 GiB) or a cloud host; desktops only through the authenticated proxy |
+| Device executor | Default real-device channel is M1 (LLD12); skills call `DeviceExecutor`, not Appium. See [device executor](docs/device-executor.md) |
 
 A single instance runs one task at a time in FIFO order, with up to two engine sessions during analysis. `completed` means execution ended; `accepted` means the human accepted delivery. Accepting a result does not commit, merge, push, or deploy code. Worktree isolation protects Git changes, not the operating system.
 
@@ -147,6 +148,7 @@ PERSONAL_AGENT_SSE_REAL_SOCKETS=1 \
 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 \
 npm test -- --maxWorkers=1 --minWorkers=1
 npm run smoke
+npm run device:smoke
 npm run build
 npm run share:check
 ```
@@ -157,7 +159,7 @@ Automated tests use temporary Git repositories, fake ACP, verification subproces
 
 Historical acceptance records are preserved by date: on 2026-10-07 a clean checkout of `39fe311` passed 605 tests in 33 files on macOS arm64, and a real greeting fixture completed 5 stages, 5 AgentRuns, 3/3 runtime tests, and 8 artifacts; the 2026-10-06 three-environment results are kept separately. These describe those commits and machines only and do not replace the current v0.1.0 / `eeeca3c` CI. Historical commands and boundaries are in [local delivery acceptance](docs/delivery-acceptance.md), later Linux records are in [Linux cloud acceptance](docs/linux-cloud-acceptance.md), and sharing guidance is in [sharing and evidence](docs/sharing.md).
 
-The service always listens on `127.0.0.1:47801`; the default no-login loopback mode must never be forwarded to the public internet. Device pairing, proxy configuration, and data migration are described in [device access](docs/device-access.md).
+The service always listens on `127.0.0.1:47801`; the default no-login loopback mode must never be forwarded to the public internet. Device pairing, proxy configuration, and data migration are described in [device access](docs/device-access.md). Real-device observe/act goes through the [device executor](docs/device-executor.md): default channel M1, smoke with `npm run device:smoke` (fake) or `npm run device:smoke -- --real` (LLD12), never occupying 47801.
 
 ### Engineering and license
 
@@ -169,7 +171,8 @@ The service always listens on `127.0.0.1:47801`; the default no-login loopback m
 | `deploy/box` | hardened pa-box image, seccomp, Xvnc unix sockets, and the gate |
 | `packages/contracts` | shared types, task state machine, and error contracts |
 | `packages/runtime` | Node SQLite, ACP, worktrees, pipeline, verification, checkpoints, and process ledger |
-| `scripts` | local demo, fixture, restricted Claude probe, backup check, explicit pairing, and box installers |
+| `packages/device` | DeviceExecutor contract, M1Adapter wrapping ios_act, and the single-writer lease |
+| `scripts` | local demo, fixture, restricted Claude probe, backup check, explicit pairing, device smoke, and box installers |
 
 The project uses npm workspaces and TypeScript ESM. Dependencies are locked by `package-lock.json`; ACP SDK is **1.3.0** and Claude ACP is **0.65.0**. Model credentials are read by the engine from native local configuration. The project does not provide login or credential migration and does not require model secrets in `.env`.
 

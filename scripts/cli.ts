@@ -29,6 +29,7 @@ export function failCli(error: unknown): void {
     DEMO_CONFIG_INVALID: 'Check PERSONAL_AGENT_DEMO_* / --public-origin: the public origin must be one exact https origin, and limits must be positive integers.',
     DEMO_FAILED: 'The isolated fake demo did not complete its checks. Run the tests and inspect the safe status output.',
     DEMO_CLEANUP_FAILED: 'Demo process cleanup is not confirmed. Preserve its temporary data, ownership records and locks for inspection.',
+    DEVICE_SMOKE: 'DeviceExecutor smoke did not complete. Use npm run device:smoke for fake, or --real on M1 without touching port 47801.',
   };
   console.error(`${code}: ${messages[code] ?? 'The command did not complete. Check its arguments and the documented prerequisites.'}`);
   process.exitCode = 1;

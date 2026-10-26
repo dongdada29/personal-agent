@@ -16,6 +16,7 @@
     "fixture": "node --import tsx scripts/create-fixture.ts",
     "pair": "node --import tsx scripts/pair.ts",
     "smoke": "node --import tsx scripts/smoke.ts",
+    "device:smoke": "node --import tsx scripts/device-smoke.ts",
     "verify:auth": "node --import tsx scripts/verify-four-layer-auth.ts",
     "verify:box-vnc": "node --import tsx scripts/verify-box-vnc-auth.ts",
     "doctor": "node --import tsx scripts/doctor.ts",
