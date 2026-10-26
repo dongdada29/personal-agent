@@ -134,6 +134,7 @@ npm exec --yes --package playwright -- node scripts/capture-demo-assets.mjs
 | 设备访问 | 显式 paired 模式、一次性配对、CSRF 与设备撤销；默认仅 loopback |
 | 桌面客户端 | Electron 托管内置服务或连接 `127.0.0.1:47801`；见 [桌面客户端](docs/desktop.md) |
 | Linux 云电脑 | 本机 Colima（默认 2 vCPU / 4 GiB / 40 GiB）或云端主机；桌面只经鉴权代理 |
+| 设备执行器 | 默认真机通道 M1（LLD12）；技能走 `DeviceExecutor`，不直连 Appium。见 [设备执行器层](docs/device-executor.md) |
 
 单实例按 FIFO 一次执行一个任务，分析阶段最多两个引擎会话并行。`completed` 表示执行完成，`accepted` 表示用户接收；接收不会提交、合并、推送或部署代码。worktree 隔离 Git 修改，不能充当操作系统沙箱。
 
@@ -147,6 +148,7 @@ PERSONAL_AGENT_SSE_REAL_SOCKETS=1 \
 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 \
 npm test -- --maxWorkers=1 --minWorkers=1
 npm run smoke
+npm run device:smoke
 npm run build
 npm run share:check
 ```
@@ -157,7 +159,7 @@ npm run share:check
 
 历史验收记录按日期保留：2026-10-07 从 `39fe311` 的干净源码完成 605 项、33 文件的 macOS arm64 全量回归，以及当日真实 greeting fixture（5 阶段、5 次 AgentRun、Runtime 3/3 测试、8 项成果）；10 月 6 日三环境结果另行保留。这些历史结果只说明当日提交和机器状态，不能替代 v0.1.0 / `eeeca3c` 的当前 CI。历史命令和边界见 [本机交付验收](docs/delivery-acceptance.md)，后续 Linux 记录见 [Linux 云端验收](docs/linux-cloud-acceptance.md)，分享材料见 [分享与证据清单](docs/sharing.md)。
 
-服务固定监听 `127.0.0.1:47801`，默认免登录本地模式不得直接转发到公网。设备配对、代理配置及原数据迁移见 [设备访问说明](docs/device-access.md)。
+服务固定监听 `127.0.0.1:47801`，默认免登录本地模式不得直接转发到公网。设备配对、代理配置及原数据迁移见 [设备访问说明](docs/device-access.md)。真机 observe/act 走 [设备执行器层](docs/device-executor.md)：默认通道 M1，烟测 `npm run device:smoke`（fake）或 `npm run device:smoke -- --real`（LLD12），不占用 47801。
 
 ### 工程与许可
 
@@ -169,7 +171,8 @@ npm run share:check
 | `deploy/box` | 加固 pa-box 镜像、seccomp、Xvnc unix socket 与网关 |
 | `packages/contracts` | 共享类型、任务状态机与错误契约 |
 | `packages/runtime` | Node SQLite、ACP、worktree、流水线、验证、检查点和进程账本 |
-| `scripts` | 本地演示、fixture、受限 Claude 探针、备份检查、显式配对与 box 安装 |
+| `packages/device` | DeviceExecutor 契约、M1Adapter（包装 ios_act）、单写控租约 |
+| `scripts` | 本地演示、fixture、受限 Claude 探针、备份检查、显式配对、设备烟测与 box 安装 |
 
 npm workspaces / TypeScript ESM；依赖由 `package-lock.json` 固定，ACP SDK **1.3.0**、Claude ACP **0.65.0**。模型凭据由引擎使用其本机原生配置，本项目不提供登录或凭据搬运服务，也不要求在 `.env` 中保存模型密钥。
 
